@@ -33,27 +33,9 @@ export default function DashboardPage() {
     getSparklineData,
   } = useAnalyticsData()
 
-  // Show loading while checking auth
-  if (authLoading) {
-    return (
-      <div className="min-h-screen bg-background">
-        <DashboardSkeleton />
-      </div>
-    )
-  }
-
-  // Don't render if not authenticated (redirect will happen via context)
-  if (!isAuthenticated) {
-    return (
-      <div className="min-h-screen bg-background">
-        <DashboardSkeleton />
-      </div>
-    )
-  }
-
   const metrics = useMemo(() => {
     if (!data) return []
-    
+
     // Calculate trend percentages based on data variance
     const calculateTrend = (current: number, baseline: number): { trend: "up" | "down"; value: string } => {
       const diff = ((current - baseline) / baseline) * 100
@@ -62,7 +44,7 @@ export default function DashboardPage() {
         value: `${diff >= 0 ? "+" : ""}${diff.toFixed(1)}%`,
       }
     }
-    
+
     // Generate trends based on sparkline data patterns
     const resumeSparkline = getSparklineData("resumesCreated")
     const paidSparkline = getSparklineData("resumesPaid")
@@ -71,7 +53,7 @@ export default function DashboardPage() {
     const genSparkline = getSparklineData("paymentsGenerated")
     const pendingSparkline = getSparklineData("paymentsPending")
     const completedSparkline = getSparklineData("paymentsCompleted")
-    
+
     return [
       {
         title: "Resumes Created",
@@ -120,6 +102,24 @@ export default function DashboardPage() {
       },
     ]
   }, [data, getSparklineData])
+
+  // Show loading while checking auth
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-background">
+        <DashboardSkeleton />
+      </div>
+    )
+  }
+
+  // Don't render if not authenticated (redirect will happen via context)
+  if (!isAuthenticated) {
+    return (
+      <div className="min-h-screen bg-background">
+        <DashboardSkeleton />
+      </div>
+    )
+  }
 
   if (error) {
     return (
