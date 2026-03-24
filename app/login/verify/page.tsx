@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState, type FormEvent } from "react"
+import { Suspense, useEffect, useState, type FormEvent } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { FileText, MailCheck } from "lucide-react"
 import { useAuth } from "@/contexts/auth-context"
@@ -14,7 +14,7 @@ interface FormErrors {
   token?: string
 }
 
-export default function VerifyLoginPage() {
+function VerifyLoginContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const email = searchParams.get("email") ?? ""
@@ -165,5 +165,19 @@ export default function VerifyLoginPage() {
         </Card>
       </div>
     </div>
+  )
+}
+
+export default function VerifyLoginPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex min-h-screen items-center justify-center bg-background p-4">
+          <Spinner />
+        </div>
+      }
+    >
+      <VerifyLoginContent />
+    </Suspense>
   )
 }
