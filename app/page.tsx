@@ -21,6 +21,7 @@ import { useAnalyticsData } from "@/hooks/use-analytics-data"
 
 export default function DashboardPage() {
   const { isAuthenticated, isLoading: authLoading } = useAuth()
+  const analyticsEnabled = isAuthenticated && !authLoading
   const {
     data,
     isLoading,
@@ -31,7 +32,7 @@ export default function DashboardPage() {
     setCustomDateRange,
     refresh,
     getSparklineData,
-  } = useAnalyticsData()
+  } = useAnalyticsData({ enabled: analyticsEnabled })
 
   const metrics = useMemo(() => {
     if (!data) return []
