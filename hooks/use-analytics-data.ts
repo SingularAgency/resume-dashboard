@@ -62,6 +62,8 @@ interface KpisApiResponse {
   payments_completed?: KpisApiMetricField
 }
 
+const MS_PER_DAY = 24 * 60 * 60 * 1000
+
 function toNumber(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) return value
   if (typeof value === "string") {
@@ -69,6 +71,67 @@ function toNumber(value: unknown): number | null {
     if (Number.isFinite(parsed)) return parsed
   }
   return null
+}
+
+function generateDateRange(startDate: Date, daysInclusive: number): string[] {
+  return Array.from({ length: daysInclusive }, (_, index) => {
+    const date = new Date(startDate.getTime() + index * MS_PER_DAY)
+    return date.toISOString().split("T")[0]
+  })
+}
+
+function previousValueFromChangePct(current: number, changePct: number): number {
+  if (changePct <= -100) return 0
+  const denominator = 1 + changePct / 100
+  if (denominator <= 0) return current
+  return current / denominator
+}
+
+function interpolateSeries(total: number, daysInclusive: number, baselineTotal: number): number[] {
+  if (daysInclusive <= 0) return []
+  const targetTotal = Math.max(0, Math.round(total))
+  const start = Math.max(0, baselineTotal / daysInclusive)
+  const end = Math.max(0, total / daysInclusive)
+  if (daysInclusive === 1) return [targetTotal]
+
+  const floatingSeries = Array.from({ length: daysInclusive }, (_, index) => {
+    const progress = index / (daysInclusive - 1)
+    return Math.max(0, start + (end - start) * progress)
+  })
+
+  const floatingSum = floatingSeries.reduce((sum, value) => sum + value, 0)
+  if (floatingSum === 0) {
+    if (targetTotal === 0) return Array.from({ length: daysInclusive }, () => 0)
+    const zeros = Array.from({ length: daysInclusive }, () => 0)
+    zeros[daysInclusive - 1] = targetTotal
+    return zeros
+  }
+
+  const scaleFactor = targetTotal / floatingSum
+  const scaledRounded = floatingSeries.map((value) => Math.max(0, Math.round(value * scaleFactor)))
+  let discrepancy = targetTotal - scaledRounded.reduce((sum, value) => sum + value, 0)
+
+  if (discrepancy > 0) {
+    for (let index = scaledRounded.length - 1; index >= 0 && discrepancy > 0; index--) {
+      scaledRounded[index] += 1
+      discrepancy -= 1
+      if (index === 0 && discrepancy > 0) index = scaledRounded.length
+    }
+  } else if (discrepancy < 0) {
+    while (discrepancy < 0) {
+      let adjusted = false
+      for (let index = scaledRounded.length - 1; index >= 0 && discrepancy < 0; index--) {
+        if (scaledRounded[index] > 0) {
+          scaledRounded[index] -= 1
+          discrepancy += 1
+          adjusted = true
+        }
+      }
+      if (!adjusted) break
+    }
+  }
+
+  return scaledRounded
 }
 
 /** Accepts API shapes: raw number/string or `{ value }` from analytics/kpis. */
@@ -147,6 +210,53 @@ function mapKpisChangePct(kpis: KpisApiResponse): Record<string, number> {
   }
 }
 
+function buildDashboardDataFromKpis(
+  metrics: ReturnType<typeof mapKpisToMetrics>,
+  changePct: Record<string, number>,
+  range: AnalyticsDateRangeResult,
+): DashboardData {
+  const dates = generateDateRange(range.startDate, range.daysInclusive)
+
+  const resumesPrevious = previousValueFromChangePct(metrics.resumesCreated, changePct.resumesCreated)
+  const resumesDaily = interpolateSeries(metrics.resumesCreated, range.daysInclusive, resumesPrevious)
+  const pdfsPrevious = previousValueFromChangePct(
+    metrics.resumePdfsGenerated,
+    changePct.resumePdfsGenerated,
+  )
+  const pdfsDaily = interpolateSeries(metrics.resumePdfsGenerated, range.daysInclusive, pdfsPrevious)
+  const printPrevious = previousValueFromChangePct(
+    metrics.resumePrintShipQty,
+    changePct.resumePrintShipQty,
+  )
+  const printDaily = interpolateSeries(metrics.resumePrintShipQty, range.daysInclusive, printPrevious)
+
+  const resumeDelivery = dates.map((date, index) => {
+    const printedShipped = printDaily[index] ?? 0
+    const resumes = resumesDaily[index] ?? 0
+    return {
+      date,
+      downloaded: Math.max(0, resumes - printedShipped),
+      printedShipped,
+    }
+  })
+
+  return {
+    metrics,
+    usersTrend: [],
+    resumeTrend: dates.map((date, index) => ({ date, resumes: resumesDaily[index] ?? 0 })),
+    resumeDelivery,
+    payments: {
+      generated: metrics.paymentsGenerated,
+      pending: metrics.paymentsPending,
+      completed: metrics.paymentsCompleted,
+    },
+    paymentMethods: [],
+    pdfsGenerated: dates.map((date, index) => ({ date, pdfs: pdfsDaily[index] ?? 0 })),
+    recentActivity: [],
+    users: [],
+  }
+}
+
 export function useAnalyticsData(
   options: UseAnalyticsDataOptions = {},
 ): UseAnalyticsDataReturn {
@@ -208,24 +318,13 @@ export function useAnalyticsData(
       })
 
       const metrics = mapKpisToMetrics(kpis)
-      setKpiChangePct(mapKpisChangePct(kpis))
-      setData({
-        metrics,
-        usersTrend: [],
-        resumeTrend: [],
-        resumeDelivery: [],
-        payments: {
-          generated: metrics.paymentsGenerated,
-          pending: metrics.paymentsPending,
-          completed: metrics.paymentsCompleted,
-        },
-        paymentMethods: [],
-        pdfsGenerated: [],
-        recentActivity: [],
-        users: [],
-      })
+      const changePct = mapKpisChangePct(kpis)
+      setKpiChangePct(changePct)
+      setData(buildDashboardDataFromKpis(metrics, changePct, resolvedDateRange.value))
     } catch (err) {
-      setError("Failed to load dashboard data. Please try again.")
+      const message =
+        err instanceof Error ? err.message : "Failed to load dashboard data. Please try again."
+      setError(message)
       console.error("Dashboard data fetch error:", err)
     } finally {
       setIsLoading(false)

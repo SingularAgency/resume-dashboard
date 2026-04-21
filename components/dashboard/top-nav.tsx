@@ -51,6 +51,10 @@ export function TopNav({
 }: TopNavProps) {
   const { user, logout } = useAuth()
   const [calendarOpen, setCalendarOpen] = useState(false)
+  const [draftCustomRange, setDraftCustomRange] = useState<DateRange>({
+    from: undefined,
+    to: undefined,
+  })
 
   const handleDateRangeSelect = (value: string) => {
     onDateRangeChange(value)
@@ -68,6 +72,9 @@ export function TopNav({
     }
     return "Select date range"
   }
+
+  const calendarSelectedRange = calendarOpen ? draftCustomRange : customDateRange
+  const canApplyCustomRange = Boolean(draftCustomRange.from && draftCustomRange.to)
 
   return (
     <header className="sticky top-0 z-50 w-full border-b bg-card/95 backdrop-blur supports-backdrop-filter:bg-card/60">
@@ -96,7 +103,18 @@ export function TopNav({
           </Select>
 
           {dateRange === "custom" && (
-            <Popover open={calendarOpen} onOpenChange={setCalendarOpen}>
+            <Popover
+              open={calendarOpen}
+              onOpenChange={(open) => {
+                setCalendarOpen(open)
+                if (open) {
+                  // Start a fresh selection flow: first click = start, second = end.
+                  setDraftCustomRange({ from: undefined, to: undefined })
+                } else {
+                  setDraftCustomRange(customDateRange)
+                }
+              }}
+            >
               <PopoverTrigger asChild>
                 <Button
                   variant="outline"
@@ -111,21 +129,55 @@ export function TopNav({
                 <Calendar
                   mode="range"
                   selected={{
-                    from: customDateRange.from,
-                    to: customDateRange.to,
+                    from: calendarSelectedRange.from,
+                    to: calendarSelectedRange.to,
                   }}
                   onSelect={(range) => {
-                    onCustomDateRangeChange({
-                      from: range?.from,
-                      to: range?.to,
-                    })
-                    if (range?.from && range?.to) {
-                      setCalendarOpen(false)
+                    const from = range?.from
+                    const to = range?.to
+
+                    if (from && !to) {
+                      setDraftCustomRange({ from, to: undefined })
+                      return
                     }
+
+                    if (from && to) {
+                      setDraftCustomRange({ from, to })
+                      return
+                    }
+
+                    setDraftCustomRange({ from: undefined, to: undefined })
                   }}
                   numberOfMonths={2}
                   disabled={{ after: new Date() }}
                 />
+                <div className="flex items-center justify-end gap-2 border-t p-3">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      setDraftCustomRange({ from: undefined, to: undefined })
+                    }}
+                  >
+                    Clear
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    disabled={!canApplyCustomRange}
+                    onClick={() => {
+                      if (!draftCustomRange.from || !draftCustomRange.to) return
+                      onCustomDateRangeChange({
+                        from: draftCustomRange.from,
+                        to: draftCustomRange.to,
+                      })
+                      setCalendarOpen(false)
+                    }}
+                  >
+                    Apply
+                  </Button>
+                </div>
               </PopoverContent>
             </Popover>
           )}

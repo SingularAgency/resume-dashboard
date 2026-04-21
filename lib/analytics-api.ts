@@ -23,6 +23,21 @@ async function getAccessTokenOrThrow(): Promise<string> {
   return token
 }
 
+async function refreshAccessTokenOrThrow(): Promise<string> {
+  if (!supabase) {
+    throw new Error("Supabase client is unavailable.")
+  }
+  const { data, error } = await supabase.auth.refreshSession()
+  if (error) {
+    throw new Error(`Failed to refresh auth session: ${error.message}`)
+  }
+  const token = data.session?.access_token
+  if (!token) {
+    throw new Error("Authentication required: could not refresh access token.")
+  }
+  return token
+}
+
 function buildUrl(path: string, query?: Record<string, string | number | undefined>): string {
   const base = getAnalyticsBaseUrl()
   const normalizedPath = path.startsWith("/") ? path : `/${path}`
@@ -36,31 +51,62 @@ function buildUrl(path: string, query?: Record<string, string | number | undefin
   return url.toString()
 }
 
+async function requestWithToken(url: string, token: string): Promise<Response> {
+  return fetch(url, {
+    method: "GET",
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    cache: "no-store",
+  })
+}
+
+async function readResponseDetail(response: Response): Promise<string | null> {
+  try {
+    const data = (await response.clone().json()) as { detail?: string; message?: string }
+    if (typeof data.detail === "string" && data.detail.trim().length > 0) return data.detail
+    if (typeof data.message === "string" && data.message.trim().length > 0) return data.message
+    return null
+  } catch {
+    return null
+  }
+}
+
+function isNetworkError(error: unknown): boolean {
+  return error instanceof TypeError
+}
+
 export async function analyticsGet<T>(
   path: string,
   query?: Record<string, string | number | undefined>,
 ): Promise<T> {
-  const token = await getAccessTokenOrThrow()
   const url = buildUrl(path, query)
   let response: Response
 
   try {
-    response = await fetch(url, {
-      method: "GET",
-      headers: {
-        Accept: "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      cache: "no-store",
-    })
-  } catch {
+    const token = await getAccessTokenOrThrow()
+    response = await requestWithToken(url, token)
+
+    // Retry once after refreshing the session when auth is rejected.
+    if (response.status === 401 || response.status === 403) {
+      const refreshedToken = await refreshAccessTokenOrThrow()
+      response = await requestWithToken(url, refreshedToken)
+    }
+  } catch (error) {
+    if (!isNetworkError(error)) {
+      throw error
+    }
     throw new Error(
       `Could not reach Analytics API at ${url}. Check backend URL/CORS and network connectivity.`,
     )
   }
 
   if (!response.ok) {
-    const message = `Analytics API request failed (${response.status})`
+    const detail = await readResponseDetail(response)
+    const message = detail
+      ? `Analytics API request failed (${response.status}): ${detail}`
+      : `Analytics API request failed (${response.status})`
     throw new Error(message)
   }
 
