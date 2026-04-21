@@ -175,7 +175,7 @@ export function TopNav({
                       setCalendarOpen(false)
                     }}
                   >
-                    Aceptar
+                    Apply
                   </Button>
                 </div>
               </PopoverContent>

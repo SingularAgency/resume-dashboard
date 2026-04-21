@@ -152,8 +152,8 @@ export default function DashboardPage() {
 
           {/* Analytics Charts Section - Row 1 */}
           <section aria-label="User and resume trends">
-            <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-              <UsersTrendChart data={data.usersTrend} />
+            <div className={`grid grid-cols-1 gap-6 ${data.usersTrend.length > 0 ? "lg:grid-cols-2" : ""}`}>
+              {data.usersTrend.length > 0 ? <UsersTrendChart data={data.usersTrend} /> : null}
               <ResumeTrendChart data={data.resumeTrend} />
             </div>
           </section>
@@ -173,9 +173,11 @@ export default function DashboardPage() {
 
           {/* Analytics Charts Section - Row 2 */}
           <section aria-label="Payment analytics">
-            <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+            <div className={`grid grid-cols-1 gap-6 ${data.paymentMethods.length > 0 ? "lg:grid-cols-2" : ""}`}>
               <PaymentsOverviewChart data={data.payments} />
-              <PaymentMethodsChart data={data.paymentMethods} />
+              {data.paymentMethods.length > 0 ? (
+                <PaymentMethodsChart data={data.paymentMethods} />
+              ) : null}
             </div>
           </section>
 

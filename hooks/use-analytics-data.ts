@@ -89,13 +89,49 @@ function previousValueFromChangePct(current: number, changePct: number): number 
 
 function interpolateSeries(total: number, daysInclusive: number, baselineTotal: number): number[] {
   if (daysInclusive <= 0) return []
+  const targetTotal = Math.max(0, Math.round(total))
   const start = Math.max(0, baselineTotal / daysInclusive)
   const end = Math.max(0, total / daysInclusive)
-  if (daysInclusive === 1) return [Math.round(end)]
-  return Array.from({ length: daysInclusive }, (_, index) => {
+  if (daysInclusive === 1) return [targetTotal]
+
+  const floatingSeries = Array.from({ length: daysInclusive }, (_, index) => {
     const progress = index / (daysInclusive - 1)
-    return Math.max(0, Math.round(start + (end - start) * progress))
+    return Math.max(0, start + (end - start) * progress)
   })
+
+  const floatingSum = floatingSeries.reduce((sum, value) => sum + value, 0)
+  if (floatingSum === 0) {
+    if (targetTotal === 0) return Array.from({ length: daysInclusive }, () => 0)
+    const zeros = Array.from({ length: daysInclusive }, () => 0)
+    zeros[daysInclusive - 1] = targetTotal
+    return zeros
+  }
+
+  const scaleFactor = targetTotal / floatingSum
+  const scaledRounded = floatingSeries.map((value) => Math.max(0, Math.round(value * scaleFactor)))
+  let discrepancy = targetTotal - scaledRounded.reduce((sum, value) => sum + value, 0)
+
+  if (discrepancy > 0) {
+    for (let index = scaledRounded.length - 1; index >= 0 && discrepancy > 0; index--) {
+      scaledRounded[index] += 1
+      discrepancy -= 1
+      if (index === 0 && discrepancy > 0) index = scaledRounded.length
+    }
+  } else if (discrepancy < 0) {
+    while (discrepancy < 0) {
+      let adjusted = false
+      for (let index = scaledRounded.length - 1; index >= 0 && discrepancy < 0; index--) {
+        if (scaledRounded[index] > 0) {
+          scaledRounded[index] -= 1
+          discrepancy += 1
+          adjusted = true
+        }
+      }
+      if (!adjusted) break
+    }
+  }
+
+  return scaledRounded
 }
 
 /** Accepts API shapes: raw number/string or `{ value }` from analytics/kpis. */
@@ -183,7 +219,6 @@ function buildDashboardDataFromKpis(
 
   const resumesPrevious = previousValueFromChangePct(metrics.resumesCreated, changePct.resumesCreated)
   const resumesDaily = interpolateSeries(metrics.resumesCreated, range.daysInclusive, resumesPrevious)
-  const usersDaily = resumesDaily.map((resumes) => Math.max(0, Math.round(resumes * 1.6)))
   const pdfsPrevious = previousValueFromChangePct(
     metrics.resumePdfsGenerated,
     changePct.resumePdfsGenerated,
@@ -205,33 +240,9 @@ function buildDashboardDataFromKpis(
     }
   })
 
-  const paymentMethodsTotal =
-    metrics.paymentsGenerated + metrics.paymentsPending + metrics.paymentsCompleted
-  const paymentMethods = paymentMethodsTotal > 0
-    ? [
-        {
-          method: "Card",
-          value: Math.round((metrics.paymentsCompleted / paymentMethodsTotal) * 100),
-        },
-        {
-          method: "Pending",
-          value: Math.round((metrics.paymentsPending / paymentMethodsTotal) * 100),
-        },
-        {
-          method: "Other",
-          value: Math.max(
-            0,
-            100 -
-              Math.round((metrics.paymentsCompleted / paymentMethodsTotal) * 100) -
-              Math.round((metrics.paymentsPending / paymentMethodsTotal) * 100),
-          ),
-        },
-      ]
-    : []
-
   return {
     metrics,
-    usersTrend: dates.map((date, index) => ({ date, users: usersDaily[index] ?? 0 })),
+    usersTrend: [],
     resumeTrend: dates.map((date, index) => ({ date, resumes: resumesDaily[index] ?? 0 })),
     resumeDelivery,
     payments: {
@@ -239,7 +250,7 @@ function buildDashboardDataFromKpis(
       pending: metrics.paymentsPending,
       completed: metrics.paymentsCompleted,
     },
-    paymentMethods,
+    paymentMethods: [],
     pdfsGenerated: dates.map((date, index) => ({ date, pdfs: pdfsDaily[index] ?? 0 })),
     recentActivity: [],
     users: [],

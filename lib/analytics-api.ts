@@ -73,6 +73,10 @@ async function readResponseDetail(response: Response): Promise<string | null> {
   }
 }
 
+function isNetworkError(error: unknown): boolean {
+  return error instanceof TypeError
+}
+
 export async function analyticsGet<T>(
   path: string,
   query?: Record<string, string | number | undefined>,
@@ -89,7 +93,10 @@ export async function analyticsGet<T>(
       const refreshedToken = await refreshAccessTokenOrThrow()
       response = await requestWithToken(url, refreshedToken)
     }
-  } catch {
+  } catch (error) {
+    if (!isNetworkError(error)) {
+      throw error
+    }
     throw new Error(
       `Could not reach Analytics API at ${url}. Check backend URL/CORS and network connectivity.`,
     )
