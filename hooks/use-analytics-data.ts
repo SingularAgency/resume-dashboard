@@ -62,6 +62,16 @@ interface KpisApiResponse {
   payments_completed?: KpisApiMetricField
 }
 
+interface TrendPoint {
+  date?: string
+  day?: string
+  value?: number | string
+  users?: number | string
+  users_count?: number | string
+  resumes?: number | string
+  resumes_created?: number | string
+}
+
 const MS_PER_DAY = 24 * 60 * 60 * 1000
 
 function toNumber(value: unknown): number | null {
@@ -78,6 +88,12 @@ function generateDateRange(startDate: Date, daysInclusive: number): string[] {
     const date = new Date(startDate.getTime() + index * MS_PER_DAY)
     return date.toISOString().split("T")[0]
   })
+}
+
+function toIsoDate(value: string): string | null {
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return null
+  return parsed.toISOString().split("T")[0]
 }
 
 function previousValueFromChangePct(current: number, changePct: number): number {
@@ -210,12 +226,95 @@ function mapKpisChangePct(kpis: KpisApiResponse): Record<string, number> {
   }
 }
 
+function buildSeriesFromTrendPoints(
+  points: TrendPoint[],
+  dates: string[],
+  valueSelector: (point: TrendPoint) => number | null,
+): number[] {
+  const aggregatedByDate = new Map<string, number>()
+
+  for (const point of points) {
+    const dateValue = point.date ?? point.day
+    if (!dateValue) continue
+    const isoDate = toIsoDate(dateValue)
+    if (!isoDate) continue
+    const value = valueSelector(point)
+    if (value === null) continue
+    aggregatedByDate.set(isoDate, (aggregatedByDate.get(isoDate) ?? 0) + Math.max(0, value))
+  }
+
+  return dates.map((date) => Math.round(aggregatedByDate.get(date) ?? 0))
+}
+
+function extractTrendPoints(payload: unknown, keys: string[]): TrendPoint[] {
+  if (Array.isArray(payload)) return payload as TrendPoint[]
+  if (!payload || typeof payload !== "object") return []
+  const record = payload as Record<string, unknown>
+
+  for (const key of keys) {
+    const candidate = record[key]
+    if (Array.isArray(candidate)) return candidate as TrendPoint[]
+  }
+
+  const nestedData = record.data
+  if (nestedData && typeof nestedData === "object") {
+    const nestedRecord = nestedData as Record<string, unknown>
+    for (const key of keys) {
+      const candidate = nestedRecord[key]
+      if (Array.isArray(candidate)) return candidate as TrendPoint[]
+    }
+  }
+  return []
+}
+
+function mapTrendsToDashboardSeries(
+  usersTrendPayload: unknown,
+  resumesTrendPayload: unknown,
+  dates: string[],
+): { usersTrend: DashboardData["usersTrend"]; resumeTrend: DashboardData["resumeTrend"] } {
+  const usersPoints = extractTrendPoints(usersTrendPayload, [
+    "usersTrend",
+    "users_trend",
+    "userTrend",
+    "user_trend",
+    "trend",
+    "items",
+  ])
+  const resumesPoints = extractTrendPoints(resumesTrendPayload, [
+    "resumeTrend",
+    "resume_trend",
+    "resumesTrend",
+    "resumes_trend",
+    "trend",
+    "items",
+  ])
+
+  const usersSeries = buildSeriesFromTrendPoints(usersPoints, dates, (point) =>
+    toNumber(point.users) ?? toNumber(point.users_count) ?? toNumber(point.value),
+  )
+  const resumesSeries = buildSeriesFromTrendPoints(resumesPoints, dates, (point) =>
+    toNumber(point.resumes) ?? toNumber(point.resumes_created) ?? toNumber(point.value),
+  )
+
+  return {
+    usersTrend: dates.map((date, index) => ({ date, users: usersSeries[index] ?? 0 })),
+    resumeTrend: dates.map((date, index) => ({ date, resumes: resumesSeries[index] ?? 0 })),
+  }
+}
+
 function buildDashboardDataFromKpis(
   metrics: ReturnType<typeof mapKpisToMetrics>,
   changePct: Record<string, number>,
+  usersTrendPayload: unknown,
+  resumesTrendPayload: unknown,
   range: AnalyticsDateRangeResult,
 ): DashboardData {
   const dates = generateDateRange(range.startDate, range.daysInclusive)
+  const { usersTrend, resumeTrend } = mapTrendsToDashboardSeries(
+    usersTrendPayload,
+    resumesTrendPayload,
+    dates,
+  )
 
   const resumesPrevious = previousValueFromChangePct(metrics.resumesCreated, changePct.resumesCreated)
   const resumesDaily = interpolateSeries(metrics.resumesCreated, range.daysInclusive, resumesPrevious)
@@ -242,8 +341,8 @@ function buildDashboardDataFromKpis(
 
   return {
     metrics,
-    usersTrend: [],
-    resumeTrend: dates.map((date, index) => ({ date, resumes: resumesDaily[index] ?? 0 })),
+    usersTrend,
+    resumeTrend,
     resumeDelivery,
     payments: {
       generated: metrics.paymentsGenerated,
@@ -316,11 +415,28 @@ export function useAnalyticsData(
         start_date: resolvedDateRange.value.startDateParam,
         end_date: resolvedDateRange.value.endDateParam,
       })
+      const usersTrendPayload = await analyticsGet<unknown>("analytics/users-trend", {
+        start_date: resolvedDateRange.value.startDateParam,
+        end_date: resolvedDateRange.value.endDateParam,
+        interval: "day",
+      })
+      const resumesTrendPayload = await analyticsGet<unknown>("analytics/resumes-trend", {
+        start_date: resolvedDateRange.value.startDateParam,
+        end_date: resolvedDateRange.value.endDateParam,
+      })
 
       const metrics = mapKpisToMetrics(kpis)
       const changePct = mapKpisChangePct(kpis)
       setKpiChangePct(changePct)
-      setData(buildDashboardDataFromKpis(metrics, changePct, resolvedDateRange.value))
+      setData(
+        buildDashboardDataFromKpis(
+          metrics,
+          changePct,
+          usersTrendPayload,
+          resumesTrendPayload,
+          resolvedDateRange.value,
+        ),
+      )
     } catch (err) {
       const message =
         err instanceof Error ? err.message : "Failed to load dashboard data. Please try again."

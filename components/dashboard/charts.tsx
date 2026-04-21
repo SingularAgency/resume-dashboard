@@ -36,6 +36,18 @@ const CHART_COLORS = {
 
 const PIE_COLORS = ["#1484EC", "#57E2E5", "#FFC300"]
 
+function formatChartDate(dateValue: string): string {
+  const parts = dateValue.split("-").map(Number)
+  if (parts.length === 3 && parts.every((part) => Number.isFinite(part))) {
+    const [year, month, day] = parts
+    return new Date(year, month - 1, day).toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+    })
+  }
+  return dateValue
+}
+
 interface UsersTrendChartProps {
   data: UserTrendData[]
 }
@@ -43,10 +55,7 @@ interface UsersTrendChartProps {
 export function UsersTrendChart({ data }: UsersTrendChartProps) {
   const formattedData = data.map((item) => ({
     ...item,
-    date: new Date(item.date).toLocaleDateString("en-US", {
-      month: "short",
-      day: "numeric",
-    }),
+    date: formatChartDate(item.date),
   }))
 
   return (
@@ -102,10 +111,7 @@ interface ResumeTrendChartProps {
 export function ResumeTrendChart({ data }: ResumeTrendChartProps) {
   const formattedData = data.map((item) => ({
     ...item,
-    date: new Date(item.date).toLocaleDateString("en-US", {
-      month: "short",
-      day: "numeric",
-    }),
+    date: formatChartDate(item.date),
   }))
 
   return (
@@ -297,10 +303,7 @@ interface PDFsGeneratedChartProps {
 export function PDFsGeneratedChart({ data }: PDFsGeneratedChartProps) {
   const formattedData = data.map((item) => ({
     ...item,
-    date: new Date(item.date).toLocaleDateString("en-US", {
-      month: "short",
-      day: "numeric",
-    }),
+    date: formatChartDate(item.date),
   }))
 
   return (
@@ -441,10 +444,7 @@ export function ResumeTypeDistributionChart({ data }: ResumeTypeDistributionProp
 export function ResumeDeliveryChart({ data }: ResumeDeliveryChartProps) {
   const formattedData = data.map((item) => ({
     ...item,
-    date: new Date(item.date).toLocaleDateString("en-US", {
-      month: "short",
-      day: "numeric",
-    }),
+    date: formatChartDate(item.date),
   }))
 
   return (
