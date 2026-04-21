@@ -1,11 +1,7 @@
 "use client"
 
 import { useState, useEffect, useCallback, useMemo } from "react"
-import type { DashboardData, DashboardMetrics } from "@/lib/mock-data"
-import {
-  generateMockAnalytics,
-  getGeneratedSparklineData,
-} from "@/lib/analytics-mock-generator"
+import type { DashboardData } from "@/lib/mock-data"
 import { analyticsGet } from "@/lib/analytics-api"
 import {
   resolveAnalyticsDateRange,
@@ -22,12 +18,12 @@ interface UseAnalyticsDataReturn {
   isLoading: boolean
   error: string | null
   analyticsQuery: { start_date: string; end_date: string } | null
+  kpiChangePct: Record<string, number> | null
   dateRange: string
   customDateRange: DateRange
   setDateRange: (range: string) => void
   setCustomDateRange: (range: DateRange) => void
   refresh: () => void
-  getSparklineData: (metricType: string) => number[]
 }
 
 interface ResolvedRangeState {
@@ -39,21 +35,31 @@ interface UseAnalyticsDataOptions {
   enabled?: boolean
 }
 
+/** KPI field from analytics/kpis: flat number or `{ value, change_pct }`. */
+interface KpisApiMetricObject {
+  value?: unknown
+  change_pct?: unknown
+}
+
+type KpisApiMetricField = number | string | KpisApiMetricObject | null | undefined
+
 interface KpisApiResponse {
-  resumesCreated?: number
-  resumes_created?: number
-  resumesPaid?: number
-  resumes_paid?: number
-  resumePdfsGenerated?: number
-  resume_pdfs_generated?: number
-  resumePrintShipQty?: number
-  resume_print_ship_qty?: number
-  paymentsGenerated?: number
-  payments_generated?: number
-  paymentsPending?: number
-  payments_pending?: number
-  paymentsCompleted?: number
-  payments_completed?: number
+  resumesCreated?: KpisApiMetricField
+  resumes_created?: KpisApiMetricField
+  resumesPaid?: KpisApiMetricField
+  resumes_paid?: KpisApiMetricField
+  resumePdfsGenerated?: KpisApiMetricField
+  resume_pdfs_generated?: KpisApiMetricField
+  pdfs_generated?: KpisApiMetricField
+  resumePrintShipQty?: KpisApiMetricField
+  resume_print_ship_qty?: KpisApiMetricField
+  print_ship_qty?: KpisApiMetricField
+  paymentsGenerated?: KpisApiMetricField
+  payments_generated?: KpisApiMetricField
+  paymentsPending?: KpisApiMetricField
+  payments_pending?: KpisApiMetricField
+  paymentsCompleted?: KpisApiMetricField
+  payments_completed?: KpisApiMetricField
 }
 
 function toNumber(value: unknown): number | null {
@@ -65,36 +71,79 @@ function toNumber(value: unknown): number | null {
   return null
 }
 
-function mapKpisToMetrics(kpis: KpisApiResponse, fallback: DashboardMetrics): DashboardMetrics {
+/** Accepts API shapes: raw number/string or `{ value }` from analytics/kpis. */
+function kpiMetricValue(field: unknown): number | null {
+  const direct = toNumber(field)
+  if (direct !== null) return direct
+  if (field !== null && typeof field === "object" && "value" in field) {
+    return toNumber((field as KpisApiMetricObject).value)
+  }
+  return null
+}
+
+function requireKpiMetricValue(fieldName: string, ...candidates: unknown[]): number {
+  for (const candidate of candidates) {
+    const value = kpiMetricValue(candidate)
+    if (value !== null) return value
+  }
+  throw new Error(`Analytics KPI '${fieldName}' is missing or invalid in API response.`)
+}
+
+function kpiMetricChangePct(...candidates: unknown[]): number | null {
+  for (const candidate of candidates) {
+    if (candidate !== null && typeof candidate === "object" && "change_pct" in candidate) {
+      const pct = toNumber((candidate as KpisApiMetricObject).change_pct)
+      if (pct !== null) return pct
+    }
+  }
+  return null
+}
+
+function mapKpisToMetrics(kpis: KpisApiResponse) {
   return {
-    resumesCreated:
-      toNumber(kpis.resumesCreated) ??
-      toNumber(kpis.resumes_created) ??
-      fallback.resumesCreated,
-    resumesPaid:
-      toNumber(kpis.resumesPaid) ??
-      toNumber(kpis.resumes_paid) ??
-      fallback.resumesPaid,
+    resumesCreated: requireKpiMetricValue("resumes_created", kpis.resumesCreated, kpis.resumes_created),
+    resumesPaid: requireKpiMetricValue("resumes_paid", kpis.resumesPaid, kpis.resumes_paid),
+    resumePdfsGenerated: requireKpiMetricValue(
+      "pdfs_generated",
+      kpis.resumePdfsGenerated,
+      kpis.resume_pdfs_generated,
+      kpis.pdfs_generated,
+    ),
+    resumePrintShipQty: requireKpiMetricValue(
+      "print_ship_qty",
+      kpis.resumePrintShipQty,
+      kpis.resume_print_ship_qty,
+      kpis.print_ship_qty,
+    ),
+    paymentsGenerated: requireKpiMetricValue(
+      "payments_generated",
+      kpis.paymentsGenerated,
+      kpis.payments_generated,
+    ),
+    paymentsPending: requireKpiMetricValue(
+      "payments_pending",
+      kpis.paymentsPending,
+      kpis.payments_pending,
+    ),
+    paymentsCompleted: requireKpiMetricValue(
+      "payments_completed",
+      kpis.paymentsCompleted,
+      kpis.payments_completed,
+    ),
+  }
+}
+
+function mapKpisChangePct(kpis: KpisApiResponse): Record<string, number> {
+  return {
+    resumesCreated: kpiMetricChangePct(kpis.resumesCreated, kpis.resumes_created) ?? 0,
+    resumesPaid: kpiMetricChangePct(kpis.resumesPaid, kpis.resumes_paid) ?? 0,
     resumePdfsGenerated:
-      toNumber(kpis.resumePdfsGenerated) ??
-      toNumber(kpis.resume_pdfs_generated) ??
-      fallback.resumePdfsGenerated,
+      kpiMetricChangePct(kpis.resumePdfsGenerated, kpis.resume_pdfs_generated, kpis.pdfs_generated) ?? 0,
     resumePrintShipQty:
-      toNumber(kpis.resumePrintShipQty) ??
-      toNumber(kpis.resume_print_ship_qty) ??
-      fallback.resumePrintShipQty,
-    paymentsGenerated:
-      toNumber(kpis.paymentsGenerated) ??
-      toNumber(kpis.payments_generated) ??
-      fallback.paymentsGenerated,
-    paymentsPending:
-      toNumber(kpis.paymentsPending) ??
-      toNumber(kpis.payments_pending) ??
-      fallback.paymentsPending,
-    paymentsCompleted:
-      toNumber(kpis.paymentsCompleted) ??
-      toNumber(kpis.payments_completed) ??
-      fallback.paymentsCompleted,
+      kpiMetricChangePct(kpis.resumePrintShipQty, kpis.resume_print_ship_qty, kpis.print_ship_qty) ?? 0,
+    paymentsGenerated: kpiMetricChangePct(kpis.paymentsGenerated, kpis.payments_generated) ?? 0,
+    paymentsPending: kpiMetricChangePct(kpis.paymentsPending, kpis.payments_pending) ?? 0,
+    paymentsCompleted: kpiMetricChangePct(kpis.paymentsCompleted, kpis.payments_completed) ?? 0,
   }
 }
 
@@ -103,6 +152,7 @@ export function useAnalyticsData(
 ): UseAnalyticsDataReturn {
   const { enabled = true } = options
   const [data, setData] = useState<DashboardData | null>(null)
+  const [kpiChangePct, setKpiChangePct] = useState<Record<string, number> | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [dateRange, setDateRangeState] = useState("30d")
@@ -152,20 +202,27 @@ export function useAnalyticsData(
         )
       }
 
-      const generatedData = generateMockAnalytics(
-        resolvedDateRange.value.daysInclusive,
-        resolvedDateRange.value.startDate,
-        resolvedDateRange.value.endDate,
-      )
-
       const kpis = await analyticsGet<KpisApiResponse>("analytics/kpis", {
         start_date: resolvedDateRange.value.startDateParam,
         end_date: resolvedDateRange.value.endDateParam,
       })
 
+      const metrics = mapKpisToMetrics(kpis)
+      setKpiChangePct(mapKpisChangePct(kpis))
       setData({
-        ...generatedData,
-        metrics: mapKpisToMetrics(kpis, generatedData.metrics),
+        metrics,
+        usersTrend: [],
+        resumeTrend: [],
+        resumeDelivery: [],
+        payments: {
+          generated: metrics.paymentsGenerated,
+          pending: metrics.paymentsPending,
+          completed: metrics.paymentsCompleted,
+        },
+        paymentMethods: [],
+        pdfsGenerated: [],
+        recentActivity: [],
+        users: [],
       })
     } catch (err) {
       setError("Failed to load dashboard data. Please try again.")
@@ -215,15 +272,6 @@ export function useAnalyticsData(
     fetchData()
   }, [enabled, fetchData])
 
-  // Get sparkline data for metrics
-  const getSparklineData = useCallback(
-    (metricType: string): number[] => {
-      if (!data) return [10, 15, 12, 18, 20, 22, 25]
-      return getGeneratedSparklineData(metricType, data)
-    },
-    [data]
-  )
-
   return {
     data,
     isLoading,
@@ -234,11 +282,11 @@ export function useAnalyticsData(
           end_date: resolvedDateRange.value.endDateParam,
         }
       : null,
+    kpiChangePct,
     dateRange,
     customDateRange,
     setDateRange,
     setCustomDateRange,
     refresh,
-    getSparklineData,
   }
 }

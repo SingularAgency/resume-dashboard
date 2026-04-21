@@ -26,83 +26,71 @@ export default function DashboardPage() {
     data,
     isLoading,
     error,
+    kpiChangePct,
     dateRange,
     customDateRange,
     setDateRange,
     setCustomDateRange,
     refresh,
-    getSparklineData,
   } = useAnalyticsData({ enabled: analyticsEnabled })
 
   const metrics = useMemo(() => {
     if (!data) return []
-
-    // Calculate trend percentages based on data variance
-    const calculateTrend = (current: number, baseline: number): { trend: "up" | "down"; value: string } => {
-      const diff = ((current - baseline) / baseline) * 100
-      return {
-        trend: diff >= 0 ? "up" : "down",
-        value: `${diff >= 0 ? "+" : ""}${diff.toFixed(1)}%`,
-      }
-    }
-
-    // Generate trends based on sparkline data patterns
-    const resumeSparkline = getSparklineData("resumesCreated")
-    const paidSparkline = getSparklineData("resumesPaid")
-    const pdfSparkline = getSparklineData("pdfGenerated")
-    const printSparkline = getSparklineData("printShip")
-    const genSparkline = getSparklineData("paymentsGenerated")
-    const pendingSparkline = getSparklineData("paymentsPending")
-    const completedSparkline = getSparklineData("paymentsCompleted")
+    const pct = kpiChangePct ?? {}
+    const metricTrend = (value: number): { trend: "up" | "down"; value: string } => ({
+      trend: value >= 0 ? "up" : "down",
+      value: `${value >= 0 ? "+" : ""}${value.toFixed(1)}%`,
+    })
+    const sparkline = (value: number): number[] => [0, 0, value * 0.25, value * 0.5, value * 0.75, value, value]
 
     return [
       {
         title: "Resumes Created",
         value: data.metrics.resumesCreated,
-        ...calculateTrend(resumeSparkline[6], resumeSparkline[0]),
-        sparklineData: resumeSparkline,
+        ...metricTrend(pct.resumesCreated ?? 0),
+        sparklineData: sparkline(pct.resumesCreated ?? 0),
       },
       {
         title: "Resumes Paid",
         value: data.metrics.resumesPaid,
-        ...calculateTrend(paidSparkline[6], paidSparkline[0]),
-        sparklineData: paidSparkline,
+        ...metricTrend(pct.resumesPaid ?? 0),
+        sparklineData: sparkline(pct.resumesPaid ?? 0),
       },
       {
         title: "PDFs Generated",
         value: data.metrics.resumePdfsGenerated,
-        ...calculateTrend(pdfSparkline[6], pdfSparkline[0]),
-        sparklineData: pdfSparkline,
+        ...metricTrend(pct.resumePdfsGenerated ?? 0),
+        sparklineData: sparkline(pct.resumePdfsGenerated ?? 0),
       },
       {
         title: "Print & Ship Qty",
         value: data.metrics.resumePrintShipQty,
-        ...calculateTrend(printSparkline[6], printSparkline[0]),
-        sparklineData: printSparkline,
+        ...metricTrend(pct.resumePrintShipQty ?? 0),
+        sparklineData: sparkline(pct.resumePrintShipQty ?? 0),
       },
       {
         title: "Payments Generated",
         value: data.metrics.paymentsGenerated,
-        ...calculateTrend(genSparkline[6], genSparkline[0]),
-        sparklineData: genSparkline,
+        ...metricTrend(pct.paymentsGenerated ?? 0),
+        sparklineData: sparkline(pct.paymentsGenerated ?? 0),
         prefix: "$",
       },
       {
         title: "Payments Pending",
         value: data.metrics.paymentsPending,
-        ...calculateTrend(pendingSparkline[0], pendingSparkline[6]), // Inverted for pending
-        sparklineData: pendingSparkline,
+        ...metricTrend(pct.paymentsPending ?? 0),
+        sparklineData: sparkline(pct.paymentsPending ?? 0),
         prefix: "$",
       },
       {
         title: "Payments Completed",
         value: data.metrics.paymentsCompleted,
-        ...calculateTrend(completedSparkline[6], completedSparkline[0]),
-        sparklineData: completedSparkline,
+        ...metricTrend(pct.paymentsCompleted ?? 0),
+        sparklineData: sparkline(pct.paymentsCompleted ?? 0),
         prefix: "$",
       },
     ]
-  }, [data, getSparklineData])
+  }, [data, kpiChangePct])
 
   // Show loading while checking auth
   if (authLoading) {
