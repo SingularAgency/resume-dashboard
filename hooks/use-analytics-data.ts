@@ -72,6 +72,26 @@ interface TrendPoint {
   resumes_created?: number | string
 }
 
+interface PaymentMethodApiItem {
+  method?: unknown
+  count?: unknown
+}
+
+interface PaymentsOverviewApiResponse {
+  totalRevenue?: unknown
+  total_revenue?: unknown
+  generated?: unknown
+  paymentsGenerated?: unknown
+  payments_generated?: unknown
+  pending?: unknown
+  completed?: unknown
+  paymentMethods?: unknown
+  payment_methods?: unknown
+  methods?: unknown
+  distribution?: unknown
+  data?: unknown
+}
+
 const MS_PER_DAY = 24 * 60 * 60 * 1000
 
 function toNumber(value: unknown): number | null {
@@ -302,11 +322,106 @@ function mapTrendsToDashboardSeries(
   }
 }
 
+function parsePaymentsOverviewPayload(
+  payload: unknown,
+  fallbackPayments: DashboardData["payments"],
+): {
+  payments: DashboardData["payments"]
+  paymentMethods: DashboardData["paymentMethods"]
+} {
+  if (!payload || typeof payload !== "object") {
+    return { payments: fallbackPayments, paymentMethods: [] }
+  }
+
+  const record = payload as PaymentsOverviewApiResponse
+  const nestedRecord =
+    record.data && typeof record.data === "object" ? (record.data as PaymentsOverviewApiResponse) : null
+
+  const totalRevenue = [
+    record.totalRevenue,
+    record.total_revenue,
+    record.generated,
+    record.paymentsGenerated,
+    record.payments_generated,
+    nestedRecord?.totalRevenue,
+    nestedRecord?.total_revenue,
+    nestedRecord?.generated,
+    nestedRecord?.paymentsGenerated,
+    nestedRecord?.payments_generated,
+  ]
+    .map((value) => toNumber(value))
+    .find((value) => value !== null)
+
+  const resolvedGenerated =
+    totalRevenue !== undefined && totalRevenue !== null && totalRevenue >= 0
+      ? totalRevenue
+      : fallbackPayments.generated
+  const pendingValue = toNumber(record.pending) ?? toNumber(nestedRecord?.pending)
+  const completedValue = toNumber(record.completed) ?? toNumber(nestedRecord?.completed)
+  const resolvedPending =
+    pendingValue !== null && pendingValue >= 0 ? pendingValue : fallbackPayments.pending
+  const resolvedCompleted =
+    completedValue !== null && completedValue >= 0 ? completedValue : fallbackPayments.completed
+
+  const paymentMethodsRaw =
+    record.paymentMethods ??
+    record.payment_methods ??
+    record.methods ??
+    record.distribution ??
+    nestedRecord?.paymentMethods ??
+    nestedRecord?.payment_methods ??
+    nestedRecord?.methods ??
+    nestedRecord?.distribution
+
+  if (!Array.isArray(paymentMethodsRaw)) {
+    return {
+      payments: {
+        generated: resolvedGenerated,
+        pending: resolvedPending,
+        completed: resolvedCompleted,
+      },
+      paymentMethods: [],
+    }
+  }
+
+  const paymentMethods = paymentMethodsRaw
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") return null
+
+      const entryRecord = entry as PaymentMethodApiItem & {
+        name?: unknown
+        value?: unknown
+      }
+      const method = typeof entryRecord.method === "string" ? entryRecord.method : entryRecord.name
+      const count = toNumber(entryRecord.count) ?? toNumber(entryRecord.value)
+
+      if (typeof method !== "string" || method.trim().length === 0 || count === null || count < 0) {
+        return null
+      }
+
+      return {
+        method: method.trim(),
+        value: count,
+      }
+    })
+    .filter((item): item is { method: string; value: number } => item !== null)
+
+  return {
+    payments: {
+      generated: resolvedGenerated,
+      pending: resolvedPending,
+      completed: resolvedCompleted,
+    },
+    paymentMethods,
+  }
+}
+
 function buildDashboardDataFromKpis(
   metrics: ReturnType<typeof mapKpisToMetrics>,
   changePct: Record<string, number>,
   usersTrendPayload: unknown,
   resumesTrendPayload: unknown,
+  paymentsOverviewPayload: unknown,
   range: AnalyticsDateRangeResult,
 ): DashboardData {
   const dates = generateDateRange(range.startDate, range.daysInclusive)
@@ -328,6 +443,11 @@ function buildDashboardDataFromKpis(
     changePct.resumePrintShipQty,
   )
   const printDaily = interpolateSeries(metrics.resumePrintShipQty, range.daysInclusive, printPrevious)
+  const paymentsOverview = parsePaymentsOverviewPayload(paymentsOverviewPayload, {
+    generated: metrics.paymentsGenerated,
+    pending: metrics.paymentsPending,
+    completed: metrics.paymentsCompleted,
+  })
 
   const resumeDelivery = dates.map((date, index) => {
     const printedShipped = printDaily[index] ?? 0
@@ -344,12 +464,8 @@ function buildDashboardDataFromKpis(
     usersTrend,
     resumeTrend,
     resumeDelivery,
-    payments: {
-      generated: metrics.paymentsGenerated,
-      pending: metrics.paymentsPending,
-      completed: metrics.paymentsCompleted,
-    },
-    paymentMethods: [],
+    payments: paymentsOverview.payments,
+    paymentMethods: paymentsOverview.paymentMethods,
     pdfsGenerated: dates.map((date, index) => ({ date, pdfs: pdfsDaily[index] ?? 0 })),
     recentActivity: [],
     users: [],
@@ -425,6 +541,10 @@ export function useAnalyticsData(
         start_date: resolvedDateRange.value.startDateParam,
         end_date: resolvedDateRange.value.endDateParam,
       })
+      const paymentsOverviewPayload = await analyticsGet<unknown>("analytics/payments-overview", {
+        start_date: resolvedDateRange.value.startDateParam,
+        end_date: resolvedDateRange.value.endDateParam,
+      })
 
       const metrics = mapKpisToMetrics(kpis)
       const changePct = mapKpisChangePct(kpis)
@@ -435,6 +555,7 @@ export function useAnalyticsData(
           changePct,
           usersTrendPayload,
           resumesTrendPayload,
+          paymentsOverviewPayload,
           resolvedDateRange.value,
         ),
       )
