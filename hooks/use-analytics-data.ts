@@ -92,6 +92,17 @@ interface PaymentsOverviewApiResponse {
   data?: unknown
 }
 
+interface ResumeDeliveryPoint {
+  date?: unknown
+  day?: unknown
+  downloaded?: unknown
+  downloads?: unknown
+  printedShipped?: unknown
+  printed_shipped?: unknown
+  printed?: unknown
+  print?: unknown
+}
+
 const MS_PER_DAY = 24 * 60 * 60 * 1000
 
 function toNumber(value: unknown): number | null {
@@ -416,12 +427,69 @@ function parsePaymentsOverviewPayload(
   }
 }
 
+function parseResumeDeliveryPayload(
+  payload: unknown,
+  dates: string[],
+): DashboardData["resumeDelivery"] | null {
+  const points = extractTrendPoints(payload, [
+    "resumeDelivery",
+    "resume_delivery",
+    "resumeDeliveryTrend",
+    "resume_delivery_trend",
+    "deliveryTrend",
+    "delivery_trend",
+    "trend",
+    "items",
+  ])
+
+  if (points.length === 0) return null
+
+  const aggregatedByDate = new Map<string, { downloaded: number; printedShipped: number }>()
+
+  for (const rawPoint of points as ResumeDeliveryPoint[]) {
+    const dateValue = typeof rawPoint.date === "string" ? rawPoint.date : rawPoint.day
+    if (typeof dateValue !== "string") continue
+
+    const isoDate = toIsoDate(dateValue)
+    if (!isoDate) continue
+
+    const downloaded = Math.max(
+      0,
+      toNumber(rawPoint.downloaded) ?? toNumber(rawPoint.downloads) ?? 0,
+    )
+    const printedShipped = Math.max(
+      0,
+      toNumber(rawPoint.printedShipped) ??
+        toNumber(rawPoint.printed_shipped) ??
+        toNumber(rawPoint.printed) ??
+        toNumber(rawPoint.print) ??
+        0,
+    )
+
+    const current = aggregatedByDate.get(isoDate) ?? { downloaded: 0, printedShipped: 0 }
+    aggregatedByDate.set(isoDate, {
+      downloaded: current.downloaded + downloaded,
+      printedShipped: current.printedShipped + printedShipped,
+    })
+  }
+
+  return dates.map((date) => {
+    const point = aggregatedByDate.get(date)
+    return {
+      date,
+      downloaded: point?.downloaded ?? 0,
+      printedShipped: point?.printedShipped ?? 0,
+    }
+  })
+}
+
 function buildDashboardDataFromKpis(
   metrics: ReturnType<typeof mapKpisToMetrics>,
   changePct: Record<string, number>,
   usersTrendPayload: unknown,
   resumesTrendPayload: unknown,
   paymentsOverviewPayload: unknown,
+  resumeDeliveryPayload: unknown,
   range: AnalyticsDateRangeResult,
 ): DashboardData {
   const dates = generateDateRange(range.startDate, range.daysInclusive)
@@ -449,15 +517,18 @@ function buildDashboardDataFromKpis(
     completed: metrics.paymentsCompleted,
   })
 
-  const resumeDelivery = dates.map((date, index) => {
-    const printedShipped = printDaily[index] ?? 0
-    const resumes = resumesDaily[index] ?? 0
-    return {
-      date,
-      downloaded: Math.max(0, resumes - printedShipped),
-      printedShipped,
-    }
-  })
+  const resumeDeliveryFromApi = parseResumeDeliveryPayload(resumeDeliveryPayload, dates)
+  const resumeDelivery =
+    resumeDeliveryFromApi ??
+    dates.map((date, index) => {
+      const printedShipped = printDaily[index] ?? 0
+      const resumes = resumesDaily[index] ?? 0
+      return {
+        date,
+        downloaded: Math.max(0, resumes - printedShipped),
+        printedShipped,
+      }
+    })
 
   return {
     metrics,
@@ -545,6 +616,16 @@ export function useAnalyticsData(
         start_date: resolvedDateRange.value.startDateParam,
         end_date: resolvedDateRange.value.endDateParam,
       })
+      let resumeDeliveryPayload: unknown = null
+      try {
+        resumeDeliveryPayload = await analyticsGet<unknown>("analytics/resume-delivery-trend", {
+          start_date: resolvedDateRange.value.startDateParam,
+          end_date: resolvedDateRange.value.endDateParam,
+        })
+      } catch (resumeDeliveryError) {
+        // Keep dashboard resilient while backend endpoint is being rolled out.
+        console.warn("Resume delivery endpoint unavailable, using KPI fallback.", resumeDeliveryError)
+      }
 
       const metrics = mapKpisToMetrics(kpis)
       const changePct = mapKpisChangePct(kpis)
@@ -556,6 +637,7 @@ export function useAnalyticsData(
           usersTrendPayload,
           resumesTrendPayload,
           paymentsOverviewPayload,
+          resumeDeliveryPayload,
           resolvedDateRange.value,
         ),
       )
