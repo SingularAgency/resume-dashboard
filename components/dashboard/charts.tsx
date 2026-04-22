@@ -36,6 +36,28 @@ const CHART_COLORS = {
 
 const PIE_COLORS = ["#1484EC", "#57E2E5", "#FFC300"]
 
+function formatChartDate(dateValue: string): string {
+  const strictDateMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateValue)
+  if (!strictDateMatch) return dateValue
+
+  const year = Number(strictDateMatch[1])
+  const month = Number(strictDateMatch[2])
+  const day = Number(strictDateMatch[3])
+  const constructedDate = new Date(year, month - 1, day)
+
+  const isSameCalendarDate =
+    constructedDate.getFullYear() === year &&
+    constructedDate.getMonth() + 1 === month &&
+    constructedDate.getDate() === day
+
+  if (!isSameCalendarDate) return dateValue
+
+  return constructedDate.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+  })
+}
+
 interface UsersTrendChartProps {
   data: UserTrendData[]
 }
@@ -43,10 +65,7 @@ interface UsersTrendChartProps {
 export function UsersTrendChart({ data }: UsersTrendChartProps) {
   const formattedData = data.map((item) => ({
     ...item,
-    date: new Date(item.date).toLocaleDateString("en-US", {
-      month: "short",
-      day: "numeric",
-    }),
+    date: formatChartDate(item.date),
   }))
 
   return (
@@ -102,10 +121,7 @@ interface ResumeTrendChartProps {
 export function ResumeTrendChart({ data }: ResumeTrendChartProps) {
   const formattedData = data.map((item) => ({
     ...item,
-    date: new Date(item.date).toLocaleDateString("en-US", {
-      month: "short",
-      day: "numeric",
-    }),
+    date: formatChartDate(item.date),
   }))
 
   return (
@@ -297,10 +313,7 @@ interface PDFsGeneratedChartProps {
 export function PDFsGeneratedChart({ data }: PDFsGeneratedChartProps) {
   const formattedData = data.map((item) => ({
     ...item,
-    date: new Date(item.date).toLocaleDateString("en-US", {
-      month: "short",
-      day: "numeric",
-    }),
+    date: formatChartDate(item.date),
   }))
 
   return (
@@ -441,10 +454,7 @@ export function ResumeTypeDistributionChart({ data }: ResumeTypeDistributionProp
 export function ResumeDeliveryChart({ data }: ResumeDeliveryChartProps) {
   const formattedData = data.map((item) => ({
     ...item,
-    date: new Date(item.date).toLocaleDateString("en-US", {
-      month: "short",
-      day: "numeric",
-    }),
+    date: formatChartDate(item.date),
   }))
 
   return (
