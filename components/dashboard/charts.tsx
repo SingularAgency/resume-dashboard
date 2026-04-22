@@ -37,15 +37,25 @@ const CHART_COLORS = {
 const PIE_COLORS = ["#1484EC", "#57E2E5", "#FFC300"]
 
 function formatChartDate(dateValue: string): string {
-  const parts = dateValue.split("-").map(Number)
-  if (parts.length === 3 && parts.every((part) => Number.isFinite(part))) {
-    const [year, month, day] = parts
-    return new Date(year, month - 1, day).toLocaleDateString("en-US", {
-      month: "short",
-      day: "numeric",
-    })
-  }
-  return dateValue
+  const strictDateMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateValue)
+  if (!strictDateMatch) return dateValue
+
+  const year = Number(strictDateMatch[1])
+  const month = Number(strictDateMatch[2])
+  const day = Number(strictDateMatch[3])
+  const constructedDate = new Date(year, month - 1, day)
+
+  const isSameCalendarDate =
+    constructedDate.getFullYear() === year &&
+    constructedDate.getMonth() + 1 === month &&
+    constructedDate.getDate() === day
+
+  if (!isSameCalendarDate) return dateValue
+
+  return constructedDate.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+  })
 }
 
 interface UsersTrendChartProps {

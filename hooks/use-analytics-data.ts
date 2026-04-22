@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useCallback, useMemo } from "react"
+import { useState, useEffect, useCallback, useMemo, useRef } from "react"
 import type { DashboardData } from "@/lib/mock-data"
 import { analyticsGet } from "@/lib/analytics-api"
 import {
@@ -369,6 +369,7 @@ export function useAnalyticsData(
     from: undefined,
     to: undefined,
   })
+  const hasHandledInitialRangeEffect = useRef(false)
 
   const resolvedDateRange = useMemo<ResolvedRangeState>(() => {
     try {
@@ -470,6 +471,10 @@ export function useAnalyticsData(
 
   // Fetch data when range changes (excluding initial mount)
   useEffect(() => {
+    if (!hasHandledInitialRangeEffect.current) {
+      hasHandledInitialRangeEffect.current = true
+      return
+    }
     if (!enabled) {
       return
     }
