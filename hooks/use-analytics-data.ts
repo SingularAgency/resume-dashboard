@@ -473,6 +473,8 @@ function parseResumeDeliveryPayload(
     })
   }
 
+  if (aggregatedByDate.size === 0) return null
+
   return dates.map((date) => {
     const point = aggregatedByDate.get(date)
     return {
