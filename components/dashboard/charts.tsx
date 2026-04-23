@@ -316,6 +316,7 @@ export function PDFsGeneratedChart({ data }: PDFsGeneratedChartProps) {
     date: formatChartDate(item.date),
   }))
   const hasPdfData = data.some((item) => item.pdfs > 0)
+  const shouldShowSinglePointDot = formattedData.length === 1 && (formattedData[0]?.pdfs ?? 0) > 0
 
   return (
     <Card>
@@ -355,7 +356,7 @@ export function PDFsGeneratedChart({ data }: PDFsGeneratedChartProps) {
                   dataKey="pdfs"
                   stroke={CHART_COLORS.tertiary}
                   strokeWidth={2}
-                  dot={false}
+                  dot={shouldShowSinglePointDot}
                   activeDot={{ r: 6 }}
                 />
               </LineChart>
