@@ -21,8 +21,12 @@ interface UseAnalyticsDataReturn {
   kpiChangePct: Record<string, number> | null
   dateRange: string
   customDateRange: DateRange
+  usersPagination: PaginationState
+  recentActivityPagination: PaginationState
   setDateRange: (range: string) => void
   setCustomDateRange: (range: DateRange) => void
+  setUsersPage: (page: number) => void
+  setRecentActivityPage: (page: number) => void
   refresh: () => void
 }
 
@@ -33,6 +37,13 @@ interface ResolvedRangeState {
 
 interface UseAnalyticsDataOptions {
   enabled?: boolean
+}
+
+interface PaginationState {
+  page: number
+  pageSize: number
+  total: number
+  totalPages: number
 }
 
 /** KPI field from analytics/kpis: flat number or `{ value, change_pct }`. */
@@ -112,7 +123,53 @@ interface PdfTrendPoint {
   value?: unknown
 }
 
+interface ResumesApiItem {
+  resume_id?: unknown
+  user_id?: unknown
+  user_name?: unknown
+  payment_status?: unknown
+  payment_method?: unknown
+  pdf_generated?: unknown
+  print_ship_status?: unknown
+  created_at?: unknown
+  resume_pdf_url?: unknown
+}
+
+interface ResumesApiResponse {
+  items?: unknown
+}
+
+interface UsersApiItem {
+  user_id?: unknown
+  name?: unknown
+  email?: unknown
+  phone?: unknown
+  purchase_status?: unknown
+  signup_date?: unknown
+  last_active?: unknown
+}
+
+interface UsersApiResponse {
+  items?: unknown
+}
+
+interface DashboardApiResponse {
+  kpis?: unknown
+  users_trend?: unknown
+  resume_trend?: unknown
+  pdfs_trend?: unknown
+  delivery_trend?: unknown
+  payments_overview?: unknown
+  payment_methods?: unknown
+}
+
 const MS_PER_DAY = 24 * 60 * 60 * 1000
+const DEFAULT_PAGINATION: PaginationState = {
+  page: 1,
+  pageSize: 20,
+  total: 0,
+  totalPages: 1,
+}
 
 function toNumber(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) return value
@@ -121,6 +178,25 @@ function toNumber(value: unknown): number | null {
     if (Number.isFinite(parsed)) return parsed
   }
   return null
+}
+
+function extractPaginationState(payload: unknown): PaginationState {
+  if (!payload || typeof payload !== "object") return DEFAULT_PAGINATION
+
+  const record = payload as {
+    page?: unknown
+    page_size?: unknown
+    total?: unknown
+    total_pages?: unknown
+  }
+
+  const page = Math.max(1, Math.round(toNumber(record.page) ?? DEFAULT_PAGINATION.page))
+  const pageSize = Math.max(1, Math.round(toNumber(record.page_size) ?? DEFAULT_PAGINATION.pageSize))
+  const total = Math.max(0, Math.round(toNumber(record.total) ?? 0))
+  const fallbackTotalPages = Math.max(1, Math.ceil(total / pageSize))
+  const totalPages = Math.max(1, Math.round(toNumber(record.total_pages) ?? fallbackTotalPages))
+
+  return { page, pageSize, total, totalPages }
 }
 
 function generateDateRange(startDate: Date, daysInclusive: number): string[] {
@@ -533,6 +609,234 @@ function parsePdfTrendPayload(payload: unknown, dates: string[]): DashboardData[
   }))
 }
 
+function mapShipmentStatus(status: unknown): DashboardData["recentActivity"][number]["shipmentStatus"] {
+  if (typeof status !== "string") return "not_applicable"
+  const normalized = status.trim().toLowerCase()
+  if (normalized === "processing") return "processing"
+  if (normalized === "shipped") return "shipped"
+  if (normalized === "in_transit" || normalized === "in transit") return "in_transit"
+  if (normalized === "delivered") return "delivered"
+  if (normalized === "failed") return "failed"
+  return "not_applicable"
+}
+
+function mapPaymentStatus(status: unknown): DashboardData["recentActivity"][number]["paymentStatus"] {
+  if (typeof status !== "string") return "pending"
+  const normalized = status.trim().toLowerCase()
+  if (normalized === "completed" || normalized === "paid") return "completed"
+  if (normalized === "failed") return "failed"
+  return "pending"
+}
+
+function mapResumesPayload(
+  payload: unknown,
+): Pick<DashboardData, "recentActivity" | "users"> {
+  if (!payload || typeof payload !== "object") {
+    return { recentActivity: [], users: [] }
+  }
+
+  const items = (payload as ResumesApiResponse).items
+  if (!Array.isArray(items)) {
+    return { recentActivity: [], users: [] }
+  }
+
+  const recentActivity: DashboardData["recentActivity"] = []
+  const usersById = new Map<
+    string,
+    {
+      id: string
+      name: string
+      hasPurchased: boolean
+      signupDate: string
+      lastActive: string
+    }
+  >()
+
+  for (const entry of items as ResumesApiItem[]) {
+    const resumeId = toNumber(entry.resume_id)
+    const userId = typeof entry.user_id === "string" && entry.user_id.trim().length > 0 ? entry.user_id : null
+    const createdAt =
+      typeof entry.created_at === "string" && !Number.isNaN(new Date(entry.created_at).getTime())
+        ? entry.created_at
+        : null
+
+    if (!resumeId || !userId || !createdAt) continue
+
+    const userName =
+      typeof entry.user_name === "string" && entry.user_name.trim().length > 0
+        ? entry.user_name.trim()
+        : `User ${userId.slice(0, 8)}`
+    const paymentStatus = mapPaymentStatus(entry.payment_status)
+    const paymentMethod =
+      typeof entry.payment_method === "string" && entry.payment_method.trim().length > 0
+        ? entry.payment_method.trim()
+        : "N/A"
+    const pdfGenerated = entry.pdf_generated === true
+    const shipmentStatus = mapShipmentStatus(entry.print_ship_status)
+    const printAndShip = shipmentStatus !== "not_applicable"
+    const resumeType: DashboardData["recentActivity"][number]["resumeType"] = printAndShip
+      ? pdfGenerated
+        ? "both"
+        : "printed_shipped"
+      : "downloaded"
+    const resumeResultPdf =
+      typeof entry.resume_pdf_url === "string" && entry.resume_pdf_url.trim().length > 0
+        ? entry.resume_pdf_url
+        : null
+
+    recentActivity.push({
+      resumeId: String(Math.round(resumeId)),
+      userId,
+      paymentStatus,
+      paymentMethod,
+      pdfGenerated,
+      printAndShip,
+      resumeType,
+      resumeResultPdf,
+      templateUsed: "N/A",
+      shipmentStatus,
+      trackingNumber: null,
+      createdDate: createdAt,
+    })
+
+    const previousUser = usersById.get(userId)
+    const hasPurchased = paymentStatus === "completed" || paymentStatus === "pending"
+    if (!previousUser) {
+      usersById.set(userId, {
+        id: userId,
+        name: userName,
+        hasPurchased,
+        signupDate: createdAt,
+        lastActive: createdAt,
+      })
+      continue
+    }
+
+    usersById.set(userId, {
+      ...previousUser,
+      name: previousUser.name === `User ${userId.slice(0, 8)}` ? userName : previousUser.name,
+      hasPurchased: previousUser.hasPurchased || hasPurchased,
+      signupDate: previousUser.signupDate < createdAt ? previousUser.signupDate : createdAt,
+      lastActive: previousUser.lastActive > createdAt ? previousUser.lastActive : createdAt,
+    })
+  }
+
+  const users: DashboardData["users"] = Array.from(usersById.values())
+    .map((user) => ({
+      ...user,
+      email: "N/A",
+      phone: "N/A",
+    }))
+    .sort((a, b) => (a.lastActive < b.lastActive ? 1 : -1))
+
+  return { recentActivity, users }
+}
+
+function mapUsersPayload(payload: unknown): DashboardData["users"] | null {
+  if (!payload || typeof payload !== "object") return null
+  const items = (payload as UsersApiResponse).items
+  if (!Array.isArray(items)) return null
+
+  const users = items
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") return null
+      const item = entry as UsersApiItem
+      const userId = typeof item.user_id === "string" && item.user_id.trim().length > 0 ? item.user_id : null
+      if (!userId) return null
+
+      const signupDateRaw = typeof item.signup_date === "string" ? item.signup_date : null
+      const lastActiveRaw = typeof item.last_active === "string" ? item.last_active : null
+      const signupDate =
+        signupDateRaw && !Number.isNaN(new Date(signupDateRaw).getTime())
+          ? signupDateRaw
+          : "1970-01-01T00:00:00.000Z"
+      const lastActive =
+        lastActiveRaw && !Number.isNaN(new Date(lastActiveRaw).getTime()) ? lastActiveRaw : signupDate
+
+      const purchaseStatus =
+        typeof item.purchase_status === "string" ? item.purchase_status.trim().toLowerCase() : null
+      const hasPurchased =
+        purchaseStatus === "purchased" ||
+        purchaseStatus === "completed" ||
+        purchaseStatus === "paid" ||
+        purchaseStatus === "pending"
+
+      return {
+        id: userId,
+        name:
+          typeof item.name === "string" && item.name.trim().length > 0
+            ? item.name.trim()
+            : `User ${userId.slice(0, 8)}`,
+        email:
+          typeof item.email === "string" && item.email.trim().length > 0 ? item.email.trim() : "N/A",
+        phone:
+          typeof item.phone === "string" && item.phone.trim().length > 0 ? item.phone.trim() : "N/A",
+        hasPurchased,
+        signupDate,
+        lastActive,
+      }
+    })
+    .filter((user): user is DashboardData["users"][number] => user !== null)
+    .sort((a, b) => (a.lastActive < b.lastActive ? 1 : -1))
+
+  return users
+}
+
+function parsePaymentMethodsPayload(payload: unknown): DashboardData["paymentMethods"] {
+  if (!payload) return []
+
+  if (Array.isArray(payload)) {
+    return payload
+      .map((entry) => {
+        if (!entry || typeof entry !== "object") return null
+        const record = entry as { method?: unknown; name?: unknown; value?: unknown; count?: unknown }
+        const method = typeof record.method === "string" ? record.method : record.name
+        const value = toNumber(record.value) ?? toNumber(record.count)
+        if (typeof method !== "string" || method.trim().length === 0 || value === null || value < 0) {
+          return null
+        }
+        return { method: method.trim(), value }
+      })
+      .filter((item): item is DashboardData["paymentMethods"][number] => item !== null)
+  }
+
+  if (typeof payload === "object") {
+    const record = payload as Record<string, unknown>
+    const mapped: DashboardData["paymentMethods"] = []
+    const candidates = [
+      { key: "card", label: "Card" },
+      { key: "paypal", label: "PayPal" },
+      { key: "other", label: "Other" },
+    ]
+    for (const candidate of candidates) {
+      const value = toNumber(record[candidate.key])
+      if (value === null || value < 0) continue
+      mapped.push({ method: candidate.label, value })
+    }
+    return mapped
+  }
+
+  return []
+}
+
+async function analyticsGetWithRetry<T>(
+  path: string,
+  query: Record<string, string | number | undefined>,
+  attempts: number,
+): Promise<T> {
+  let lastError: unknown = null
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      return await analyticsGet<T>(path, query)
+    } catch (error) {
+      lastError = error
+      if (attempt === attempts) break
+      await new Promise((resolve) => setTimeout(resolve, attempt * 250))
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("Failed after retry attempts.")
+}
+
 function buildDashboardDataFromKpis(
   metrics: ReturnType<typeof mapKpisToMetrics>,
   changePct: Record<string, number>,
@@ -541,6 +845,9 @@ function buildDashboardDataFromKpis(
   paymentsOverviewPayload: unknown,
   resumeDeliveryPayload: unknown,
   pdfTrendPayload: unknown,
+  paymentMethodsPayload: unknown,
+  resumesPayload: unknown,
+  usersPayload: unknown,
   range: AnalyticsDateRangeResult,
 ): DashboardData {
   const dates = generateDateRange(range.startDate, range.daysInclusive)
@@ -570,6 +877,9 @@ function buildDashboardDataFromKpis(
 
   const resumeDeliveryFromApi = parseResumeDeliveryPayload(resumeDeliveryPayload, dates)
   const pdfTrendFromApi = parsePdfTrendPayload(pdfTrendPayload, dates)
+  const paymentMethodsFromApi = parsePaymentMethodsPayload(paymentMethodsPayload)
+  const { recentActivity, users: usersFromResumes } = mapResumesPayload(resumesPayload)
+  const usersFromUsersEndpoint = mapUsersPayload(usersPayload)
   const resumeDelivery =
     resumeDeliveryFromApi ??
     dates.map((date, index) => {
@@ -588,10 +898,11 @@ function buildDashboardDataFromKpis(
     resumeTrend,
     resumeDelivery,
     payments: paymentsOverview.payments,
-    paymentMethods: paymentsOverview.paymentMethods,
+    paymentMethods:
+      paymentMethodsFromApi.length > 0 ? paymentMethodsFromApi : paymentsOverview.paymentMethods,
     pdfsGenerated: pdfTrendFromApi ?? dates.map((date, index) => ({ date, pdfs: pdfsDaily[index] ?? 0 })),
-    recentActivity: [],
-    users: [],
+    recentActivity,
+    users: usersFromUsersEndpoint ?? usersFromResumes,
   }
 }
 
@@ -608,6 +919,11 @@ export function useAnalyticsData(
     from: undefined,
     to: undefined,
   })
+  const [usersPage, setUsersPageState] = useState(1)
+  const [recentActivityPage, setRecentActivityPageState] = useState(1)
+  const [usersPagination, setUsersPagination] = useState<PaginationState>(DEFAULT_PAGINATION)
+  const [recentActivityPagination, setRecentActivityPagination] =
+    useState<PaginationState>(DEFAULT_PAGINATION)
   const hasHandledInitialRangeEffect = useRef(false)
 
   const resolvedDateRange = useMemo<ResolvedRangeState>(() => {
@@ -651,46 +967,52 @@ export function useAnalyticsData(
         )
       }
 
-      const kpis = await analyticsGet<KpisApiResponse>("analytics/kpis", {
+      const dashboardPayload = await analyticsGet<DashboardApiResponse>("analytics/dashboard", {
         start_date: resolvedDateRange.value.startDateParam,
         end_date: resolvedDateRange.value.endDateParam,
       })
-      const usersTrendPayload = await analyticsGet<unknown>("analytics/users-trend", {
-        start_date: resolvedDateRange.value.startDateParam,
-        end_date: resolvedDateRange.value.endDateParam,
-        interval: "day",
-      })
-      const resumesTrendPayload = await analyticsGet<unknown>("analytics/resumes-trend", {
-        start_date: resolvedDateRange.value.startDateParam,
-        end_date: resolvedDateRange.value.endDateParam,
-      })
-      const paymentsOverviewPayload = await analyticsGet<unknown>("analytics/payments-overview", {
-        start_date: resolvedDateRange.value.startDateParam,
-        end_date: resolvedDateRange.value.endDateParam,
-      })
-      let resumeDeliveryPayload: unknown = null
+      const kpis = (dashboardPayload.kpis ?? {}) as KpisApiResponse
+      const usersTrendPayload = dashboardPayload.users_trend ?? null
+      const resumesTrendPayload = dashboardPayload.resume_trend ?? null
+      const paymentsOverviewPayload = dashboardPayload.payments_overview ?? null
+      const resumeDeliveryPayload = dashboardPayload.delivery_trend ?? null
+      const pdfTrendPayload = dashboardPayload.pdfs_trend ?? null
+      const paymentMethodsPayload = dashboardPayload.payment_methods ?? null
+      let resumesPayload: unknown = null
       try {
-        resumeDeliveryPayload = await analyticsGet<unknown>("analytics/resume-delivery-trend", {
-          start_date: resolvedDateRange.value.startDateParam,
-          end_date: resolvedDateRange.value.endDateParam,
-        })
-      } catch (resumeDeliveryError) {
-        // Keep dashboard resilient while backend endpoint is being rolled out.
-        console.warn("Resume delivery endpoint unavailable, using KPI fallback.", resumeDeliveryError)
+        resumesPayload = await analyticsGetWithRetry<unknown>(
+          "analytics/resumes",
+          {
+            page: recentActivityPage,
+            page_size: 20,
+            start_date: resolvedDateRange.value.startDateParam,
+            end_date: resolvedDateRange.value.endDateParam,
+          },
+          3,
+        )
+      } catch (resumesError) {
+        console.warn("Resumes endpoint unavailable, keeping users/activity empty.", resumesError)
       }
-      let pdfTrendPayload: unknown = null
+      let usersPayload: unknown = null
       try {
-        pdfTrendPayload = await analyticsGet<unknown>("analytics/pdfs-trend", {
-          start_date: resolvedDateRange.value.startDateParam,
-          end_date: resolvedDateRange.value.endDateParam,
-        })
-      } catch (pdfTrendError) {
-        // Keep dashboard resilient while backend endpoint is being rolled out.
-        console.warn("PDF trend endpoint unavailable, using KPI fallback.", pdfTrendError)
+        usersPayload = await analyticsGetWithRetry<unknown>(
+          "analytics/users",
+          {
+            page: usersPage,
+            page_size: 20,
+            start_date: resolvedDateRange.value.startDateParam,
+            end_date: resolvedDateRange.value.endDateParam,
+          },
+          3,
+        )
+      } catch (usersError) {
+        console.warn("Users endpoint unavailable, falling back to resumes-derived users.", usersError)
       }
 
       const metrics = mapKpisToMetrics(kpis)
       const changePct = mapKpisChangePct(kpis)
+      setRecentActivityPagination(extractPaginationState(resumesPayload))
+      setUsersPagination(extractPaginationState(usersPayload))
       setKpiChangePct(changePct)
       setData(
         buildDashboardDataFromKpis(
@@ -701,6 +1023,9 @@ export function useAnalyticsData(
           paymentsOverviewPayload,
           resumeDeliveryPayload,
           pdfTrendPayload,
+          paymentMethodsPayload,
+          resumesPayload,
+          usersPayload,
           resolvedDateRange.value,
         ),
       )
@@ -712,7 +1037,7 @@ export function useAnalyticsData(
     } finally {
       setIsLoading(false)
     }
-  }, [enabled, resolvedDateRange])
+  }, [enabled, resolvedDateRange, recentActivityPage, usersPage])
 
   // Initial data load
   useEffect(() => {
@@ -725,6 +1050,8 @@ export function useAnalyticsData(
   // Handle date range changes
   const setDateRange = useCallback((range: string) => {
     setDateRangeState(range)
+    setUsersPageState(1)
+    setRecentActivityPageState(1)
     if (range !== "custom") {
       setCustomDateRangeState({ from: undefined, to: undefined })
     }
@@ -732,7 +1059,17 @@ export function useAnalyticsData(
 
   // Handle custom date range changes
   const setCustomDateRange = useCallback((range: DateRange) => {
+    setUsersPageState(1)
+    setRecentActivityPageState(1)
     setCustomDateRangeState(range)
+  }, [])
+
+  const setUsersPage = useCallback((page: number) => {
+    setUsersPageState(Math.max(1, page))
+  }, [])
+
+  const setRecentActivityPage = useCallback((page: number) => {
+    setRecentActivityPageState(Math.max(1, page))
   }, [])
 
   // Fetch data when range changes (excluding initial mount)
@@ -750,7 +1087,14 @@ export function useAnalyticsData(
     }
 
     fetchData()
-  }, [enabled, dateRange, customDateRange.from?.getTime(), customDateRange.to?.getTime()])
+  }, [
+    enabled,
+    dateRange,
+    customDateRange.from?.getTime(),
+    customDateRange.to?.getTime(),
+    recentActivityPage,
+    usersPage,
+  ])
 
   // Refresh function
   const refresh = useCallback(() => {
@@ -771,8 +1115,12 @@ export function useAnalyticsData(
     kpiChangePct,
     dateRange,
     customDateRange,
+    usersPagination,
+    recentActivityPagination,
     setDateRange,
     setCustomDateRange,
+    setUsersPage,
+    setRecentActivityPage,
     refresh,
   }
 }
