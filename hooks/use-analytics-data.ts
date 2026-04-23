@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react"
 import type { DashboardData } from "@/lib/mock-data"
-import { analyticsGet } from "@/lib/analytics-api"
+import { analyticsGet, isAbortError, type AnalyticsGetOptions } from "@/lib/analytics-api"
 import {
   resolveAnalyticsDateRange,
   type AnalyticsDateRangeResult,
@@ -630,28 +630,17 @@ function mapPaymentStatus(status: unknown): DashboardData["recentActivity"][numb
 
 function mapResumesPayload(
   payload: unknown,
-): Pick<DashboardData, "recentActivity" | "users"> {
+): Pick<DashboardData, "recentActivity"> {
   if (!payload || typeof payload !== "object") {
-    return { recentActivity: [], users: [] }
+    return { recentActivity: [] }
   }
 
   const items = (payload as ResumesApiResponse).items
   if (!Array.isArray(items)) {
-    return { recentActivity: [], users: [] }
+    return { recentActivity: [] }
   }
 
   const recentActivity: DashboardData["recentActivity"] = []
-  const usersById = new Map<
-    string,
-    {
-      id: string
-      name: string
-      hasPurchased: boolean
-      signupDate: string
-      lastActive: string
-    }
-  >()
-
   for (const entry of items as ResumesApiItem[]) {
     const resumeId = toNumber(entry.resume_id)
     const userId = typeof entry.user_id === "string" && entry.user_id.trim().length > 0 ? entry.user_id : null
@@ -662,10 +651,6 @@ function mapResumesPayload(
 
     if (!resumeId || !userId || !createdAt) continue
 
-    const userName =
-      typeof entry.user_name === "string" && entry.user_name.trim().length > 0
-        ? entry.user_name.trim()
-        : `User ${userId.slice(0, 8)}`
     const paymentStatus = mapPaymentStatus(entry.payment_status)
     const paymentMethod =
       typeof entry.payment_method === "string" && entry.payment_method.trim().length > 0
@@ -698,41 +683,15 @@ function mapResumesPayload(
       trackingNumber: null,
       createdDate: createdAt,
     })
-
-    const previousUser = usersById.get(userId)
-    const hasPurchased = paymentStatus === "completed" || paymentStatus === "pending"
-    if (!previousUser) {
-      usersById.set(userId, {
-        id: userId,
-        name: userName,
-        hasPurchased,
-        signupDate: createdAt,
-        lastActive: createdAt,
-      })
-      continue
-    }
-
-    usersById.set(userId, {
-      ...previousUser,
-      name: previousUser.name === `User ${userId.slice(0, 8)}` ? userName : previousUser.name,
-      hasPurchased: previousUser.hasPurchased || hasPurchased,
-      signupDate: previousUser.signupDate < createdAt ? previousUser.signupDate : createdAt,
-      lastActive: previousUser.lastActive > createdAt ? previousUser.lastActive : createdAt,
-    })
   }
 
-  const users: DashboardData["users"] = Array.from(usersById.values())
-    .map((user) => ({
-      ...user,
-      email: "N/A",
-      phone: "N/A",
-    }))
-    .sort((a, b) => (a.lastActive < b.lastActive ? 1 : -1))
-
-  return { recentActivity, users }
+  return { recentActivity }
 }
 
 function mapUsersPayload(payload: unknown): DashboardData["users"] | null {
+  // "All users" should come from `analytics/users` (paginated). This returns null when
+  // the users endpoint is unavailable/invalid, so the UI can avoid misleading fallbacks
+  // derived from `analytics/resumes` page slices.
   if (!payload || typeof payload !== "object") return null
   const items = (payload as UsersApiResponse).items
   if (!Array.isArray(items)) return null
@@ -755,11 +714,9 @@ function mapUsersPayload(payload: unknown): DashboardData["users"] | null {
 
       const purchaseStatus =
         typeof item.purchase_status === "string" ? item.purchase_status.trim().toLowerCase() : null
+      // "Purchased" should reflect a completed / confirmed purchase, not a pending checkout.
       const hasPurchased =
-        purchaseStatus === "purchased" ||
-        purchaseStatus === "completed" ||
-        purchaseStatus === "paid" ||
-        purchaseStatus === "pending"
+        purchaseStatus === "purchased" || purchaseStatus === "completed" || purchaseStatus === "paid"
 
       return {
         id: userId,
@@ -819,19 +776,52 @@ function parsePaymentMethodsPayload(payload: unknown): DashboardData["paymentMet
   return []
 }
 
+function sleepWithAbortSignal(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) {
+    return Promise.reject(new DOMException("The operation was aborted.", "AbortError"))
+  }
+  if (!signal) {
+    return new Promise((resolve) => setTimeout(resolve, ms))
+  }
+  return new Promise((resolve, reject) => {
+    let settled = false
+    const timeoutId = setTimeout(() => {
+      if (settled) return
+      settled = true
+      signal.removeEventListener("abort", onAbort)
+      resolve()
+    }, ms)
+    const onAbort = () => {
+      if (settled) return
+      settled = true
+      clearTimeout(timeoutId)
+      reject(new DOMException("The operation was aborted.", "AbortError"))
+    }
+    signal.addEventListener("abort", onAbort, { once: true })
+  })
+}
+
 async function analyticsGetWithRetry<T>(
   path: string,
   query: Record<string, string | number | undefined>,
   attempts: number,
+  options?: AnalyticsGetOptions,
 ): Promise<T> {
   let lastError: unknown = null
   for (let attempt = 1; attempt <= attempts; attempt++) {
+    const signal = options?.signal
+    if (signal?.aborted) {
+      throw new DOMException("The operation was aborted.", "AbortError")
+    }
     try {
-      return await analyticsGet<T>(path, query)
+      return await analyticsGet<T>(path, query, options)
     } catch (error) {
+      if (isAbortError(error)) {
+        throw error
+      }
       lastError = error
       if (attempt === attempts) break
-      await new Promise((resolve) => setTimeout(resolve, attempt * 250))
+      await sleepWithAbortSignal(attempt * 250, signal)
     }
   }
   throw lastError instanceof Error ? lastError : new Error("Failed after retry attempts.")
@@ -878,7 +868,9 @@ function buildDashboardDataFromKpis(
   const resumeDeliveryFromApi = parseResumeDeliveryPayload(resumeDeliveryPayload, dates)
   const pdfTrendFromApi = parsePdfTrendPayload(pdfTrendPayload, dates)
   const paymentMethodsFromApi = parsePaymentMethodsPayload(paymentMethodsPayload)
-  const { recentActivity, users: usersFromResumes } = mapResumesPayload(resumesPayload)
+  const { recentActivity } = mapResumesPayload(resumesPayload)
+  // Only use `mapUsersPayload` for the "All users" table. Do not derive users from
+  // `analytics/resumes` because it's paginated and would be misleading.
   const usersFromUsersEndpoint = mapUsersPayload(usersPayload)
   const resumeDelivery =
     resumeDeliveryFromApi ??
@@ -902,7 +894,7 @@ function buildDashboardDataFromKpis(
       paymentMethodsFromApi.length > 0 ? paymentMethodsFromApi : paymentsOverview.paymentMethods,
     pdfsGenerated: pdfTrendFromApi ?? dates.map((date, index) => ({ date, pdfs: pdfsDaily[index] ?? 0 })),
     recentActivity,
-    users: usersFromUsersEndpoint ?? usersFromResumes,
+    users: usersFromUsersEndpoint ?? [],
   }
 }
 
@@ -925,6 +917,8 @@ export function useAnalyticsData(
   const [recentActivityPagination, setRecentActivityPagination] =
     useState<PaginationState>(DEFAULT_PAGINATION)
   const hasHandledInitialRangeEffect = useRef(false)
+  const inFlightIdRef = useRef(0)
+  const inFlightFetchAbortRef = useRef<AbortController | null>(null)
 
   const resolvedDateRange = useMemo<ResolvedRangeState>(() => {
     try {
@@ -948,8 +942,21 @@ export function useAnalyticsData(
     if (!enabled) {
       setIsLoading(false)
       setError(null)
+      inFlightIdRef.current += 1
+      inFlightFetchAbortRef.current?.abort()
+      inFlightFetchAbortRef.current = null
       return
     }
+
+    inFlightIdRef.current += 1
+    const thisFetchId = inFlightIdRef.current
+    inFlightFetchAbortRef.current?.abort()
+    const controller = new AbortController()
+    inFlightFetchAbortRef.current = controller
+    const requestOptions: AnalyticsGetOptions = { signal: controller.signal }
+
+    const isStale = () => thisFetchId !== inFlightIdRef.current
+    if (isStale()) return
 
     setIsLoading(true)
     setError(null)
@@ -958,7 +965,8 @@ export function useAnalyticsData(
     const loadingTime = 300 + Math.random() * 500
 
     try {
-      await new Promise((resolve) => setTimeout(resolve, loadingTime))
+      await sleepWithAbortSignal(loadingTime, requestOptions.signal)
+      if (isStale() || requestOptions.signal?.aborted) return
 
       if (!resolvedDateRange.value) {
         throw new Error(
@@ -966,11 +974,17 @@ export function useAnalyticsData(
             "Invalid date range. Custom ranges must be up to 365 days.",
         )
       }
+      if (isStale() || requestOptions.signal?.aborted) return
 
-      const dashboardPayload = await analyticsGet<DashboardApiResponse>("analytics/dashboard", {
-        start_date: resolvedDateRange.value.startDateParam,
-        end_date: resolvedDateRange.value.endDateParam,
-      })
+      const dashboardPayload = await analyticsGet<DashboardApiResponse>(
+        "analytics/dashboard",
+        {
+          start_date: resolvedDateRange.value.startDateParam,
+          end_date: resolvedDateRange.value.endDateParam,
+        },
+        requestOptions,
+      )
+      if (isStale() || requestOptions.signal?.aborted) return
       const kpis = (dashboardPayload.kpis ?? {}) as KpisApiResponse
       const usersTrendPayload = dashboardPayload.users_trend ?? null
       const resumesTrendPayload = dashboardPayload.resume_trend ?? null
@@ -989,10 +1003,15 @@ export function useAnalyticsData(
             end_date: resolvedDateRange.value.endDateParam,
           },
           3,
+          requestOptions,
         )
       } catch (resumesError) {
+        if (isAbortError(resumesError)) {
+          throw resumesError
+        }
         console.warn("Resumes endpoint unavailable, keeping users/activity empty.", resumesError)
       }
+      if (isStale() || requestOptions.signal?.aborted) return
       let usersPayload: unknown = null
       try {
         usersPayload = await analyticsGetWithRetry<unknown>(
@@ -1004,15 +1023,23 @@ export function useAnalyticsData(
             end_date: resolvedDateRange.value.endDateParam,
           },
           3,
+          requestOptions,
         )
       } catch (usersError) {
-        console.warn("Users endpoint unavailable, falling back to resumes-derived users.", usersError)
+        if (isAbortError(usersError)) {
+          throw usersError
+        }
+        console.warn("Users endpoint unavailable, keeping all-users table empty (users come from /analytics/users only).", usersError)
       }
+      if (isStale() || requestOptions.signal?.aborted) return
 
       const metrics = mapKpisToMetrics(kpis)
       const changePct = mapKpisChangePct(kpis)
-      setRecentActivityPagination(extractPaginationState(resumesPayload))
-      setUsersPagination(extractPaginationState(usersPayload))
+      if (isStale() || requestOptions.signal?.aborted) return
+      // Don't reset table pagination to defaults if a paginated endpoint request failed
+      // and the payload is still null (keeps the last good pagination on transient errors).
+      setRecentActivityPagination((prev) => (resumesPayload == null ? prev : extractPaginationState(resumesPayload)))
+      setUsersPagination((prev) => (usersPayload == null ? prev : extractPaginationState(usersPayload)))
       setKpiChangePct(changePct)
       setData(
         buildDashboardDataFromKpis(
@@ -1030,12 +1057,17 @@ export function useAnalyticsData(
         ),
       )
     } catch (err) {
+      if (isAbortError(err) || isStale()) {
+        return
+      }
       const message =
         err instanceof Error ? err.message : "Failed to load dashboard data. Please try again."
       setError(message)
       console.error("Dashboard data fetch error:", err)
     } finally {
-      setIsLoading(false)
+      if (thisFetchId === inFlightIdRef.current) {
+        setIsLoading(false)
+      }
     }
   }, [enabled, resolvedDateRange, recentActivityPage, usersPage])
 

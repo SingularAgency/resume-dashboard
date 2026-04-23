@@ -2,6 +2,21 @@ import { supabase } from "@/lib/supabase-client"
 
 const analyticsBaseUrl = process.env.NEXT_PUBLIC_ANALYTICS_API_URL
 
+export type AnalyticsGetOptions = {
+  signal?: AbortSignal
+}
+
+export function isAbortError(error: unknown): boolean {
+  if (!error) return false
+  if (typeof error === "object" && "name" in error && (error as { name?: string }).name === "AbortError") {
+    return true
+  }
+  if (error instanceof DOMException && error.name === "AbortError") {
+    return true
+  }
+  return false
+}
+
 function getAnalyticsBaseUrl(): string {
   if (!analyticsBaseUrl) {
     throw new Error("Missing NEXT_PUBLIC_ANALYTICS_API_URL")
@@ -51,7 +66,7 @@ function buildUrl(path: string, query?: Record<string, string | number | undefin
   return url.toString()
 }
 
-async function requestWithToken(url: string, token: string): Promise<Response> {
+async function requestWithToken(url: string, token: string, signal?: AbortSignal): Promise<Response> {
   return fetch(url, {
     method: "GET",
     headers: {
@@ -59,6 +74,7 @@ async function requestWithToken(url: string, token: string): Promise<Response> {
       Authorization: `Bearer ${token}`,
     },
     cache: "no-store",
+    signal,
   })
 }
 
@@ -74,26 +90,35 @@ async function readResponseDetail(response: Response): Promise<string | null> {
 }
 
 function isNetworkError(error: unknown): boolean {
+  if (isAbortError(error)) return false
   return error instanceof TypeError
 }
 
 export async function analyticsGet<T>(
   path: string,
   query?: Record<string, string | number | undefined>,
+  options?: AnalyticsGetOptions,
 ): Promise<T> {
   const url = buildUrl(path, query)
   let response: Response
+  const signal = options?.signal
+  if (signal?.aborted) {
+    throw new DOMException("The operation was aborted.", "AbortError")
+  }
 
   try {
     const token = await getAccessTokenOrThrow()
-    response = await requestWithToken(url, token)
+    response = await requestWithToken(url, token, signal)
 
     // Retry once after refreshing the session when auth is rejected.
     if (response.status === 401 || response.status === 403) {
       const refreshedToken = await refreshAccessTokenOrThrow()
-      response = await requestWithToken(url, refreshedToken)
+      response = await requestWithToken(url, refreshedToken, signal)
     }
   } catch (error) {
+    if (isAbortError(error)) {
+      throw error
+    }
     if (!isNetworkError(error)) {
       throw error
     }

@@ -211,7 +211,7 @@ export function UsersTable({ data, pagination, onPageChange, isLoading = false }
             </TableBody>
           </Table>
         </div>
-        {filteredAndSortedUsers.length > 0 && (
+        {(isLoading || pagination.total > 0) && (
           <div className="mt-4 flex flex-col gap-3 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
             <span>
               Showing {filteredAndSortedUsers.length} users on page {pagination.page} of{" "}
