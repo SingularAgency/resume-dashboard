@@ -103,6 +103,15 @@ interface ResumeDeliveryPoint {
   print?: unknown
 }
 
+interface PdfTrendPoint {
+  date?: unknown
+  day?: unknown
+  pdfs?: unknown
+  generated?: unknown
+  count?: unknown
+  value?: unknown
+}
+
 const MS_PER_DAY = 24 * 60 * 60 * 1000
 
 function toNumber(value: unknown): number | null {
@@ -485,6 +494,45 @@ function parseResumeDeliveryPayload(
   })
 }
 
+function parsePdfTrendPayload(payload: unknown, dates: string[]): DashboardData["pdfsGenerated"] | null {
+  const points = extractTrendPoints(payload, [
+    "pdfTrend",
+    "pdf_trend",
+    "pdfsTrend",
+    "pdfs_trend",
+    "trend",
+    "items",
+  ])
+
+  if (points.length === 0) return null
+
+  const aggregatedByDate = new Map<string, number>()
+
+  for (const rawPoint of points as PdfTrendPoint[]) {
+    const dateValue = typeof rawPoint.date === "string" ? rawPoint.date : rawPoint.day
+    if (typeof dateValue !== "string") continue
+
+    const isoDate = toIsoDate(dateValue)
+    if (!isoDate) continue
+
+    const value =
+      toNumber(rawPoint.pdfs) ??
+      toNumber(rawPoint.generated) ??
+      toNumber(rawPoint.count) ??
+      toNumber(rawPoint.value)
+    if (value === null) continue
+
+    aggregatedByDate.set(isoDate, (aggregatedByDate.get(isoDate) ?? 0) + Math.max(0, value))
+  }
+
+  if (aggregatedByDate.size === 0) return null
+
+  return dates.map((date) => ({
+    date,
+    pdfs: Math.round(aggregatedByDate.get(date) ?? 0),
+  }))
+}
+
 function buildDashboardDataFromKpis(
   metrics: ReturnType<typeof mapKpisToMetrics>,
   changePct: Record<string, number>,
@@ -492,6 +540,7 @@ function buildDashboardDataFromKpis(
   resumesTrendPayload: unknown,
   paymentsOverviewPayload: unknown,
   resumeDeliveryPayload: unknown,
+  pdfTrendPayload: unknown,
   range: AnalyticsDateRangeResult,
 ): DashboardData {
   const dates = generateDateRange(range.startDate, range.daysInclusive)
@@ -520,6 +569,7 @@ function buildDashboardDataFromKpis(
   })
 
   const resumeDeliveryFromApi = parseResumeDeliveryPayload(resumeDeliveryPayload, dates)
+  const pdfTrendFromApi = parsePdfTrendPayload(pdfTrendPayload, dates)
   const resumeDelivery =
     resumeDeliveryFromApi ??
     dates.map((date, index) => {
@@ -539,7 +589,7 @@ function buildDashboardDataFromKpis(
     resumeDelivery,
     payments: paymentsOverview.payments,
     paymentMethods: paymentsOverview.paymentMethods,
-    pdfsGenerated: dates.map((date, index) => ({ date, pdfs: pdfsDaily[index] ?? 0 })),
+    pdfsGenerated: pdfTrendFromApi ?? dates.map((date, index) => ({ date, pdfs: pdfsDaily[index] ?? 0 })),
     recentActivity: [],
     users: [],
   }
@@ -628,6 +678,16 @@ export function useAnalyticsData(
         // Keep dashboard resilient while backend endpoint is being rolled out.
         console.warn("Resume delivery endpoint unavailable, using KPI fallback.", resumeDeliveryError)
       }
+      let pdfTrendPayload: unknown = null
+      try {
+        pdfTrendPayload = await analyticsGet<unknown>("analytics/pdfs-trend", {
+          start_date: resolvedDateRange.value.startDateParam,
+          end_date: resolvedDateRange.value.endDateParam,
+        })
+      } catch (pdfTrendError) {
+        // Keep dashboard resilient while backend endpoint is being rolled out.
+        console.warn("PDF trend endpoint unavailable, using KPI fallback.", pdfTrendError)
+      }
 
       const metrics = mapKpisToMetrics(kpis)
       const changePct = mapKpisChangePct(kpis)
@@ -640,6 +700,7 @@ export function useAnalyticsData(
           resumesTrendPayload,
           paymentsOverviewPayload,
           resumeDeliveryPayload,
+          pdfTrendPayload,
           resolvedDateRange.value,
         ),
       )

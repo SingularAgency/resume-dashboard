@@ -315,6 +315,7 @@ export function PDFsGeneratedChart({ data }: PDFsGeneratedChartProps) {
     ...item,
     date: formatChartDate(item.date),
   }))
+  const hasPdfData = data.some((item) => item.pdfs > 0)
 
   return (
     <Card>
@@ -325,35 +326,45 @@ export function PDFsGeneratedChart({ data }: PDFsGeneratedChartProps) {
       </CardHeader>
       <CardContent>
         <div className="h-[300px]">
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={formattedData}>
-              <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
-              <XAxis
-                dataKey="date"
-                tick={{ fontSize: 12 }}
-                tickLine={false}
-                axisLine={false}
-              />
-              <YAxis
-                tick={{ fontSize: 12 }}
-                tickLine={false}
-                axisLine={false}
-                width={40}
-              />
-              <Tooltip
-                contentStyle={{
-                  backgroundColor: "var(--card)",
-                  border: "1px solid var(--border)",
-                  borderRadius: "8px",
-                }}
-              />
-              <Bar
-                dataKey="pdfs"
-                fill={CHART_COLORS.tertiary}
-                radius={[4, 4, 0, 0]}
-              />
-            </BarChart>
-          </ResponsiveContainer>
+          {hasPdfData ? (
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={formattedData}>
+                <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                <XAxis
+                  dataKey="date"
+                  tick={{ fontSize: 12 }}
+                  tickLine={false}
+                  axisLine={false}
+                  interval="preserveStartEnd"
+                />
+                <YAxis
+                  tick={{ fontSize: 12 }}
+                  tickLine={false}
+                  axisLine={false}
+                  width={40}
+                />
+                <Tooltip
+                  contentStyle={{
+                    backgroundColor: "var(--card)",
+                    border: "1px solid var(--border)",
+                    borderRadius: "8px",
+                  }}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="pdfs"
+                  stroke={CHART_COLORS.tertiary}
+                  strokeWidth={2}
+                  dot={false}
+                  activeDot={{ r: 6 }}
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+              No PDF generation data for the selected range.
+            </div>
+          )}
         </div>
       </CardContent>
     </Card>
