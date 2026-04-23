@@ -16,9 +16,22 @@ import type { RecentActivity } from "@/lib/mock-data"
 
 interface ActivityTableProps {
   data: RecentActivity[]
+  pagination: {
+    page: number
+    pageSize: number
+    total: number
+    totalPages: number
+  }
+  onPageChange: (page: number) => void
+  isLoading?: boolean
 }
 
-export function ActivityTable({ data }: ActivityTableProps) {
+export function ActivityTable({
+  data,
+  pagination,
+  onPageChange,
+  isLoading = false,
+}: ActivityTableProps) {
   const getStatusBadge = (status: RecentActivity["paymentStatus"]) => {
     switch (status) {
       case "completed":
@@ -186,59 +199,91 @@ export function ActivityTable({ data }: ActivityTableProps) {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {data.map((activity) => (
-                <TableRow key={activity.resumeId}>
-                  <TableCell className="font-medium">
-                    {activity.resumeId}
-                  </TableCell>
-                  <TableCell>{activity.userId}</TableCell>
-                  <TableCell>
-                    <Badge variant="secondary">{activity.templateUsed}</Badge>
-                  </TableCell>
-                  <TableCell>{getResumeTypeBadge(activity.resumeType)}</TableCell>
-                  <TableCell>{getStatusBadge(activity.paymentStatus)}</TableCell>
-                  <TableCell>{activity.paymentMethod}</TableCell>
-                  <TableCell>{getBooleanIcon(activity.pdfGenerated)}</TableCell>
-                  <TableCell>{getBooleanIcon(activity.printAndShip)}</TableCell>
-                  <TableCell>
-                    {getShipmentStatusBadge(activity.shipmentStatus, activity.trackingNumber)}
-                  </TableCell>
-                  <TableCell>
-                    {activity.resumeResultPdf ? (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="gap-1 text-primary hover:text-primary/80"
-                        asChild
-                      >
-                        <a
-                          href={activity.resumeResultPdf}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                        >
-                          <FileText className="h-4 w-4" />
-                          View PDF
-                          <ExternalLink className="h-3 w-3" />
-                        </a>
-                      </Button>
-                    ) : (
-                      <span className="text-muted-foreground">Not generated</span>
-                    )}
-                  </TableCell>
-                  <TableCell>
-                    {new Date(activity.createdDate).toLocaleDateString(
-                      "en-US",
-                      {
-                        month: "short",
-                        day: "numeric",
-                        year: "numeric",
-                      }
-                    )}
+              {data.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={11} className="h-24 text-center text-muted-foreground">
+                    No recent activity found for the selected range.
                   </TableCell>
                 </TableRow>
-              ))}
+              ) : (
+                data.map((activity) => (
+                  <TableRow key={activity.resumeId}>
+                    <TableCell className="font-medium">
+                      {activity.resumeId}
+                    </TableCell>
+                    <TableCell>{activity.userId}</TableCell>
+                    <TableCell>
+                      <Badge variant="secondary">{activity.templateUsed}</Badge>
+                    </TableCell>
+                    <TableCell>{getResumeTypeBadge(activity.resumeType)}</TableCell>
+                    <TableCell>{getStatusBadge(activity.paymentStatus)}</TableCell>
+                    <TableCell>{activity.paymentMethod}</TableCell>
+                    <TableCell>{getBooleanIcon(activity.pdfGenerated)}</TableCell>
+                    <TableCell>{getBooleanIcon(activity.printAndShip)}</TableCell>
+                    <TableCell>
+                      {getShipmentStatusBadge(activity.shipmentStatus, activity.trackingNumber)}
+                    </TableCell>
+                    <TableCell>
+                      {activity.resumeResultPdf ? (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="gap-1 text-primary hover:text-primary/80"
+                          asChild
+                        >
+                          <a
+                            href={activity.resumeResultPdf}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            <FileText className="h-4 w-4" />
+                            View PDF
+                            <ExternalLink className="h-3 w-3" />
+                          </a>
+                        </Button>
+                      ) : (
+                        <span className="text-muted-foreground">Not generated</span>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      {new Date(activity.createdDate).toLocaleDateString(
+                        "en-US",
+                        {
+                          month: "short",
+                          day: "numeric",
+                          year: "numeric",
+                        }
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
             </TableBody>
           </Table>
+        </div>
+        <div className="mt-4 flex flex-col gap-3 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
+          <span>
+            Page {pagination.page} of {pagination.totalPages} ({pagination.total.toLocaleString()} total
+            activities)
+          </span>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={isLoading || pagination.page <= 1}
+              onClick={() => onPageChange(pagination.page - 1)}
+            >
+              Previous
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={isLoading || pagination.page >= pagination.totalPages}
+              onClick={() => onPageChange(pagination.page + 1)}
+            >
+              Next
+            </Button>
+          </div>
         </div>
       </CardContent>
     </Card>

@@ -27,9 +27,17 @@ type SortOrder = "none" | "purchased_first" | "not_purchased_first"
 
 interface UsersTableProps {
   data: User[]
+  pagination: {
+    page: number
+    pageSize: number
+    total: number
+    totalPages: number
+  }
+  onPageChange: (page: number) => void
+  isLoading?: boolean
 }
 
-export function UsersTable({ data }: UsersTableProps) {
+export function UsersTable({ data, pagination, onPageChange, isLoading = false }: UsersTableProps) {
   const [purchaseFilter, setPurchaseFilter] = useState<PurchaseFilter>("all")
   const [sortOrder, setSortOrder] = useState<SortOrder>("none")
 
@@ -157,22 +165,30 @@ export function UsersTable({ data }: UsersTableProps) {
                     <TableCell className="font-medium">{user.id}</TableCell>
                     <TableCell className="font-medium">{user.name}</TableCell>
                     <TableCell>
-                      <a
-                        href={`mailto:${user.email}`}
-                        className="flex items-center gap-1.5 text-primary hover:underline"
-                      >
-                        <Mail className="h-4 w-4" />
-                        {user.email}
-                      </a>
+                      {user.email === "N/A" ? (
+                        <span className="text-muted-foreground">{user.email}</span>
+                      ) : (
+                        <a
+                          href={`mailto:${user.email}`}
+                          className="flex items-center gap-1.5 text-primary hover:underline"
+                        >
+                          <Mail className="h-4 w-4" />
+                          {user.email}
+                        </a>
+                      )}
                     </TableCell>
                     <TableCell>
-                      <a
-                        href={`tel:${user.phone.replace(/\D/g, "")}`}
-                        className="flex items-center gap-1.5 text-primary hover:underline"
-                      >
-                        <Phone className="h-4 w-4" />
-                        {user.phone}
-                      </a>
+                      {user.phone === "N/A" ? (
+                        <span className="text-muted-foreground">{user.phone}</span>
+                      ) : (
+                        <a
+                          href={`tel:${user.phone.replace(/\D/g, "")}`}
+                          className="flex items-center gap-1.5 text-primary hover:underline"
+                        >
+                          <Phone className="h-4 w-4" />
+                          {user.phone}
+                        </a>
+                      )}
                     </TableCell>
                     <TableCell>{getPurchaseStatusBadge(user.hasPurchased)}</TableCell>
                     <TableCell>
@@ -195,9 +211,30 @@ export function UsersTable({ data }: UsersTableProps) {
             </TableBody>
           </Table>
         </div>
-        {filteredAndSortedUsers.length > 0 && (
-          <div className="mt-4 text-sm text-muted-foreground">
-            Showing {filteredAndSortedUsers.length} of {data.length} users
+        {(isLoading || pagination.total > 0) && (
+          <div className="mt-4 flex flex-col gap-3 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
+            <span>
+              Showing {filteredAndSortedUsers.length} users on page {pagination.page} of{" "}
+              {pagination.totalPages} ({pagination.total.toLocaleString()} total)
+            </span>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={isLoading || pagination.page <= 1}
+                onClick={() => onPageChange(pagination.page - 1)}
+              >
+                Previous
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={isLoading || pagination.page >= pagination.totalPages}
+                onClick={() => onPageChange(pagination.page + 1)}
+              >
+                Next
+              </Button>
+            </div>
           </div>
         )}
       </CardContent>

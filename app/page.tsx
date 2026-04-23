@@ -29,8 +29,12 @@ export default function DashboardPage() {
     kpiChangePct,
     dateRange,
     customDateRange,
+    usersPagination,
+    recentActivityPagination,
     setDateRange,
     setCustomDateRange,
+    setUsersPage,
+    setRecentActivityPage,
     refresh,
   } = useAnalyticsData({ enabled: analyticsEnabled })
 
@@ -183,12 +187,22 @@ export default function DashboardPage() {
 
           {/* Users Table Section */}
           <section aria-label="All users">
-            <UsersTable data={data.users} />
+            <UsersTable
+              data={data.users}
+              pagination={usersPagination}
+              onPageChange={setUsersPage}
+              isLoading={isLoading}
+            />
           </section>
 
           {/* Data Table Section */}
           <section aria-label="Recent activity">
-            <ActivityTable data={data.recentActivity} />
+            <ActivityTable
+              data={data.recentActivity}
+              pagination={recentActivityPagination}
+              onPageChange={setRecentActivityPage}
+              isLoading={isLoading}
+            />
           </section>
         </main>
       ) : null}
