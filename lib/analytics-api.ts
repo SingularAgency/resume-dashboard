@@ -4,6 +4,7 @@ const analyticsBaseUrl = process.env.NEXT_PUBLIC_ANALYTICS_API_URL
 
 export type AnalyticsGetOptions = {
   signal?: AbortSignal
+  timeoutMs?: number
 }
 
 export function isAbortError(error: unknown): boolean {
@@ -66,16 +67,49 @@ function buildUrl(path: string, query?: Record<string, string | number | undefin
   return url.toString()
 }
 
-async function requestWithToken(url: string, token: string, signal?: AbortSignal): Promise<Response> {
-  return fetch(url, {
-    method: "GET",
-    headers: {
-      Accept: "application/json",
-      Authorization: `Bearer ${token}`,
-    },
-    cache: "no-store",
-    signal,
-  })
+async function requestWithToken(
+  url: string,
+  token: string,
+  signal?: AbortSignal,
+  timeoutMs?: number,
+): Promise<Response> {
+  if (!timeoutMs || timeoutMs <= 0) {
+    return fetch(url, {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      cache: "no-store",
+      signal,
+    })
+  }
+
+  const timeoutController = new AbortController()
+  const timeoutId = setTimeout(() => timeoutController.abort(), timeoutMs)
+  const externalAbortHandler = () => timeoutController.abort()
+  signal?.addEventListener("abort", externalAbortHandler, { once: true })
+
+  try {
+    return await fetch(url, {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      cache: "no-store",
+      signal: timeoutController.signal,
+    })
+  } catch (error) {
+    const timedOut = !signal?.aborted && timeoutController.signal.aborted
+    if (timedOut && isAbortError(error)) {
+      throw new Error(`Analytics API request timed out after ${timeoutMs}ms.`)
+    }
+    throw error
+  } finally {
+    clearTimeout(timeoutId)
+    signal?.removeEventListener("abort", externalAbortHandler)
+  }
 }
 
 async function readResponseDetail(response: Response): Promise<string | null> {
@@ -102,18 +136,19 @@ export async function analyticsGet<T>(
   const url = buildUrl(path, query)
   let response: Response
   const signal = options?.signal
+  const timeoutMs = options?.timeoutMs
   if (signal?.aborted) {
     throw new DOMException("The operation was aborted.", "AbortError")
   }
 
   try {
     const token = await getAccessTokenOrThrow()
-    response = await requestWithToken(url, token, signal)
+    response = await requestWithToken(url, token, signal, timeoutMs)
 
     // Retry once after refreshing the session when auth is rejected.
     if (response.status === 401 || response.status === 403) {
       const refreshedToken = await refreshAccessTokenOrThrow()
-      response = await requestWithToken(url, refreshedToken, signal)
+      response = await requestWithToken(url, refreshedToken, signal, timeoutMs)
     }
   } catch (error) {
     if (isAbortError(error)) {
