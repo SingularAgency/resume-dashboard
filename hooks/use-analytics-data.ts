@@ -17,6 +17,7 @@ interface UseAnalyticsDataReturn {
   data: DashboardData | null
   isLoading: boolean
   error: string | null
+  dataWarning: string | null
   analyticsQuery: { start_date: string; end_date: string } | null
   kpiChangePct: Record<string, number> | null
   dateRange: string
@@ -170,6 +171,7 @@ const DEFAULT_PAGINATION: PaginationState = {
   total: 0,
   totalPages: 1,
 }
+const ANALYTICS_REQUEST_TIMEOUT_MS = 5000
 
 function toNumber(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) return value
@@ -197,6 +199,26 @@ function extractPaginationState(payload: unknown): PaginationState {
   const totalPages = Math.max(1, Math.round(toNumber(record.total_pages) ?? fallbackTotalPages))
 
   return { page, pageSize, total, totalPages }
+}
+
+function readCachedDashboardData(cacheKey: string): DashboardData | null {
+  if (typeof window === "undefined") return null
+  try {
+    const raw = window.sessionStorage.getItem(cacheKey)
+    if (!raw) return null
+    return JSON.parse(raw) as DashboardData
+  } catch {
+    return null
+  }
+}
+
+function writeCachedDashboardData(cacheKey: string, value: DashboardData): void {
+  if (typeof window === "undefined") return
+  try {
+    window.sessionStorage.setItem(cacheKey, JSON.stringify(value))
+  } catch {
+    // Ignore cache write failures (quota/private mode).
+  }
 }
 
 function generateDateRange(startDate: Date, daysInclusive: number): string[] {
@@ -906,6 +928,7 @@ export function useAnalyticsData(
   const [kpiChangePct, setKpiChangePct] = useState<Record<string, number> | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [dataWarning, setDataWarning] = useState<string | null>(null)
   const [dateRange, setDateRangeState] = useState("30d")
   const [customDateRange, setCustomDateRangeState] = useState<DateRange>({
     from: undefined,
@@ -919,6 +942,7 @@ export function useAnalyticsData(
   const hasHandledInitialRangeEffect = useRef(false)
   const inFlightIdRef = useRef(0)
   const inFlightFetchAbortRef = useRef<AbortController | null>(null)
+  const lastSuccessfulDataRef = useRef<DashboardData | null>(null)
 
   const resolvedDateRange = useMemo<ResolvedRangeState>(() => {
     try {
@@ -942,6 +966,7 @@ export function useAnalyticsData(
     if (!enabled) {
       setIsLoading(false)
       setError(null)
+      setDataWarning(null)
       inFlightIdRef.current += 1
       inFlightFetchAbortRef.current?.abort()
       inFlightFetchAbortRef.current = null
@@ -953,16 +978,21 @@ export function useAnalyticsData(
     inFlightFetchAbortRef.current?.abort()
     const controller = new AbortController()
     inFlightFetchAbortRef.current = controller
-    const requestOptions: AnalyticsGetOptions = { signal: controller.signal }
+    const requestOptions: AnalyticsGetOptions = {
+      signal: controller.signal,
+      timeoutMs: ANALYTICS_REQUEST_TIMEOUT_MS,
+    }
 
     const isStale = () => thisFetchId !== inFlightIdRef.current
     if (isStale()) return
 
     setIsLoading(true)
     setError(null)
+    setDataWarning(null)
 
     // Simulate API loading time (300-800ms)
     const loadingTime = 300 + Math.random() * 500
+    let cachedDataForRequest: DashboardData | null = null
 
     try {
       await sleepWithAbortSignal(loadingTime, requestOptions.signal)
@@ -975,6 +1005,19 @@ export function useAnalyticsData(
         )
       }
       if (isStale() || requestOptions.signal?.aborted) return
+
+      const cacheKey = [
+        "analytics-dashboard-cache",
+        resolvedDateRange.value.startDateParam,
+        resolvedDateRange.value.endDateParam,
+        `u${usersPage}`,
+        `r${recentActivityPage}`,
+      ].join("|")
+      cachedDataForRequest = readCachedDashboardData(cacheKey)
+      if (!data && cachedDataForRequest) {
+        setData(cachedDataForRequest)
+        setDataWarning("Showing cached dashboard data while refreshing.")
+      }
 
       const dashboardPayload = await analyticsGet<DashboardApiResponse>(
         "analytics/dashboard",
@@ -992,6 +1035,7 @@ export function useAnalyticsData(
       const resumeDeliveryPayload = dashboardPayload.delivery_trend ?? null
       const pdfTrendPayload = dashboardPayload.pdfs_trend ?? null
       const paymentMethodsPayload = dashboardPayload.payment_methods ?? null
+      let partialDataUnavailable = false
       let resumesPayload: unknown = null
       try {
         resumesPayload = await analyticsGetWithRetry<unknown>(
@@ -1009,6 +1053,7 @@ export function useAnalyticsData(
         if (isAbortError(resumesError)) {
           throw resumesError
         }
+        partialDataUnavailable = true
         console.warn("Resumes endpoint unavailable, keeping users/activity empty.", resumesError)
       }
       if (isStale() || requestOptions.signal?.aborted) return
@@ -1029,6 +1074,7 @@ export function useAnalyticsData(
         if (isAbortError(usersError)) {
           throw usersError
         }
+        partialDataUnavailable = true
         console.warn("Users endpoint unavailable, keeping all-users table empty (users come from /analytics/users only).", usersError)
       }
       if (isStale() || requestOptions.signal?.aborted) return
@@ -1041,29 +1087,44 @@ export function useAnalyticsData(
       setRecentActivityPagination((prev) => (resumesPayload == null ? prev : extractPaginationState(resumesPayload)))
       setUsersPagination((prev) => (usersPayload == null ? prev : extractPaginationState(usersPayload)))
       setKpiChangePct(changePct)
-      setData(
-        buildDashboardDataFromKpis(
-          metrics,
-          changePct,
-          usersTrendPayload,
-          resumesTrendPayload,
-          paymentsOverviewPayload,
-          resumeDeliveryPayload,
-          pdfTrendPayload,
-          paymentMethodsPayload,
-          resumesPayload,
-          usersPayload,
-          resolvedDateRange.value,
-        ),
+      const nextData = buildDashboardDataFromKpis(
+        metrics,
+        changePct,
+        usersTrendPayload,
+        resumesTrendPayload,
+        paymentsOverviewPayload,
+        resumeDeliveryPayload,
+        pdfTrendPayload,
+        paymentMethodsPayload,
+        resumesPayload,
+        usersPayload,
+        resolvedDateRange.value,
+      )
+      setData(nextData)
+      lastSuccessfulDataRef.current = nextData
+      writeCachedDashboardData(cacheKey, nextData)
+      setDataWarning(
+        partialDataUnavailable
+          ? "Some sections are temporarily unavailable. Showing available data."
+          : null,
       )
     } catch (err) {
       if (isAbortError(err) || isStale()) {
         return
       }
-      const message =
-        err instanceof Error ? err.message : "Failed to load dashboard data. Please try again."
-      setError(message)
-      console.error("Dashboard data fetch error:", err)
+      const fallbackData = lastSuccessfulDataRef.current ?? cachedDataForRequest
+      if (fallbackData) {
+        setData(fallbackData)
+        setError(null)
+        setDataWarning("Some data sources failed. Showing last successful dashboard snapshot.")
+        console.warn("Dashboard data fetch failed, using cached snapshot.", err)
+      } else {
+        const message =
+          err instanceof Error ? err.message : "Failed to load dashboard data. Please try again."
+        setError(message)
+        setDataWarning(null)
+        console.error("Dashboard data fetch error:", err)
+      }
     } finally {
       if (thisFetchId === inFlightIdRef.current) {
         setIsLoading(false)
@@ -1138,6 +1199,7 @@ export function useAnalyticsData(
     data,
     isLoading,
     error,
+    dataWarning,
     analyticsQuery: resolvedDateRange.value
       ? {
           start_date: resolvedDateRange.value.startDateParam,

@@ -26,6 +26,7 @@ export default function DashboardPage() {
     data,
     isLoading,
     error,
+    dataWarning,
     kpiChangePct,
     dateRange,
     customDateRange,
@@ -140,6 +141,14 @@ export default function DashboardPage() {
         customDateRange={customDateRange}
         onCustomDateRangeChange={setCustomDateRange}
       />
+
+      {dataWarning ? (
+        <div className="container mx-auto px-4 pt-4 md:px-6 lg:px-8">
+          <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            {dataWarning}
+          </div>
+        </div>
+      ) : null}
 
       {isLoading ? (
         <DashboardSkeleton />
